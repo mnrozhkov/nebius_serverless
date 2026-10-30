@@ -2,7 +2,6 @@ schema_version: 1
 kind: job
 image: nvidia/cuda:13.1.1-runtime-ubuntu24.04
 command: ["bash", "-c", "nvidia-smi"]
-platform: gpu-l40s-a
-preset: 1gpu-8vcpu-32gb
+gpu: l40s
 timeout: 1h
 name: my-job

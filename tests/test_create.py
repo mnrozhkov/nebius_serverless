@@ -214,6 +214,72 @@ def test_profile_file_supplies_project_and_region(tmp_path: Path) -> None:
     )
     with pytest.raises(ns.ValidationError):
         load_profile(config_file=ambiguous)
+    global_endpoint = tmp_path / "global.yaml"
+    global_endpoint.write_text(
+        "\n".join(
+            [
+                "default: test",
+                "profiles:",
+                "  test:",
+                "    parent-id: project-123",
+                "    endpoint: api.nebius.cloud",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert load_profile(config_file=global_endpoint) == (
+        "project-123",
+        None,
+    )
+
+
+def test_project_region_fills_a_global_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def load(
+        profile: str | None = None,
+        **kwargs: object,
+    ) -> tuple[str, str | None]:
+        return ("project-123", None)
+
+    def region(profile: str | None, project_id: str) -> str:
+        assert profile is None
+        assert project_id == "project-123"
+        return "eu-north1"
+
+    monkeypatch.setattr("nebius_serverless.job.load_profile", load)
+    monkeypatch.setattr(
+        "nebius_serverless.sdk_transport.project_region",
+        region,
+    )
+    described = _job().create(dry_run=True)
+    assert isinstance(described, dict)
+    assert described["region"] == "eu-north1"
+    assert described["project"] == "project-123"
+    assert described["platform"] == "gpu-h100-sxm"
+
+
+def test_explicit_region_skips_the_project_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def load(
+        profile: str | None = None,
+        **kwargs: object,
+    ) -> tuple[str, str | None]:
+        return ("project-123", None)
+
+    def region(profile: str | None, project_id: str) -> str:
+        raise AssertionError(project_id)
+
+    monkeypatch.setattr("nebius_serverless.job.load_profile", load)
+    monkeypatch.setattr(
+        "nebius_serverless.sdk_transport.project_region",
+        region,
+    )
+    described = _job().create(dry_run=True, region="eu-north1")
+    assert isinstance(described, dict)
+    assert described["region"] == "eu-north1"
 
 
 def test_sdk_request_omits_on_demand_flags() -> None:

@@ -21,11 +21,14 @@ def load_profile(
     profile: str | None = None,
     *,
     config_file: str | Path | None = None,
-) -> tuple[str, str]:
+) -> tuple[str, str | None]:
     """Return ``(project_id, region)`` from the SDK profile.
 
-    A missing or ambiguous project or region raises ``ValidationError``
-    before create. The message does not include credential material.
+    ``region`` is set when the profile or its endpoint names one. A
+    profile that only has a project id returns ``None`` for the region;
+    the caller then reads ``Project.spec.region``. A missing or
+    ambiguous project raises ``ValidationError``. The message does not
+    include credential material.
     """
     try:
         from nebius.aio.cli_config import Config
@@ -45,8 +48,6 @@ def load_profile(
         raise ValidationError(_MISSING, operation="create") from None
     region = _region_of(config)
     if not isinstance(project, str) or project.strip() == "":
-        raise ValidationError(_MISSING, operation="create")
-    if region is None:
         raise ValidationError(_MISSING, operation="create")
     return project, region
 

@@ -111,7 +111,7 @@ Callers that already have an event loop use awaited twins: `create_async`, `get_
 
 ## 4. GPU and CPU aliases
 
-Presets are the smallest one-GPU size on that platform, or the smallest CPU preset. Source: [VM types](https://docs.nebius.com/compute/virtual-machines/types), 28 October 2026. The project region comes from the active Nebius profile. An alias whose platform is not in that region raises `ValidationError` before create and names the regions that have it.
+Presets are the smallest one-GPU size on that platform, or the smallest CPU preset. Source: [VM types](https://docs.nebius.com/compute/virtual-machines/types), 28 October 2026. The project region comes from the profile when it names one, otherwise from the project's `spec.region`. An alias whose platform is not in that region raises `ValidationError` before create and names the regions that have it.
 
 | `gpu` | Region | Platform | Preset |
 | --- | --- | --- | --- |
@@ -167,9 +167,9 @@ Terminal states are whatever `status.state` the Jobs API uses for a finished job
 
 ## 7. Authentication and project
 
-`create` and `get` use the active Nebius Python SDK profile and its project id and region. The package does not read arbitrary credential files itself and does not shell out to the `nebius` CLI.
+`create` and `get` use the active Nebius Python SDK profile and its project id. The region comes from that profile when it names one, otherwise from IAM v2 `Project.spec.region`. The package does not read arbitrary credential files itself and does not shell out to the `nebius` CLI.
 
-Optional `profile=` and `project=` on `Job` select a profile or override the project. Missing or ambiguous project or region configuration raises `ValidationError` before create. The package does not switch profile, project, or region after an error.
+Optional `profile=` and `project=` on `Job` select a profile or override the project. `region=` overrides the resolved region. Missing or ambiguous project configuration, or a project with no region, raises `ValidationError` before create. The package does not switch profile, project, or region after an error.
 
 ## 8. Create mapping
 
@@ -242,7 +242,7 @@ The package is a `src` layout declared in `pyproject.toml`. `Job()` does not imp
 
 ## 13. Acceptance scenarios
 
-The slice is accepted when the three scripts in `examples/acceptance/` succeed against an authorized project. Each script dry-runs unless it is passed `--create`. `--create` is the live run. The short job and the Axolotl job pin the platform and preset from their cookbook commands. The line-count script uses `h100` unless `--gpu` says otherwise, and that alias must exist in the project region.
+The slice is accepted when the three scripts in `examples/acceptance/` succeed against an authorized project. Each script dry-runs unless it is passed `--create`. `--create` is the live run. The short job and the Axolotl job pass `gpu`. That alias resolves to the platform and preset from their cookbook commands. The line-count script uses `h100` unless `--gpu` says otherwise, and that alias must exist in the project region. `examples/quickstart.py` is the section 2 recipe.
 
 A scenario succeeds when every `run.wait()` returns job JSON whose `status.state` is `COMPLETED`. The CLI documents that state for a successful job. The package does not upload objects and does not read them back. Where a scenario uses a bucket, the script talks to Object Storage with the AWS CLI. The endpoint is `https://storage.<region>.nebius.cloud`.
 
@@ -254,8 +254,9 @@ A scenario succeeds when every `run.wait()` returns job JSON whose `status.state
 | --- | --- |
 | image | `nvidia/cuda:13.1.1-runtime-ubuntu24.04` |
 | command | `["bash", "-c", "nvidia-smi"]` |
-| platform | `gpu-l40s-a` |
-| preset | `1gpu-8vcpu-32gb` |
+| gpu | `l40s` |
+| platform | `gpu-l40s-a`, resolved from `l40s` |
+| preset | `1gpu-8vcpu-32gb`, resolved from `l40s` |
 | timeout | `1h` |
 | name | `my-job` |
 
@@ -271,8 +272,9 @@ A scenario succeeds when every `run.wait()` returns job JSON whose `status.state
 | --- | --- |
 | image | `docker.io/axolotlai/axolotl:main-20260309-py3.11-cu128-2.9.1` |
 | command | `bash -lc` and the cookbook `--command` string |
-| platform | `gpu-h100-sxm` |
-| preset | `1gpu-16vcpu-200gb` |
+| gpu | `h100` |
+| platform | `gpu-h100-sxm`, resolved from `h100` |
+| preset | `1gpu-16vcpu-200gb`, resolved from `h100` |
 | pricing | `spot` |
 | disk | `500Gi` |
 | timeout | `24h` |

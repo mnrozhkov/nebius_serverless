@@ -4,11 +4,42 @@ Scripts below use the active Nebius profile. `create(dry_run=True)` prints the r
 
 The alias for `gpu` must exist in that region. See the [alias table](reference.md#gpu-and-cpu-aliases). Logs are `nebius ai job logs <id>`.
 
-Runnable acceptance scripts live in `examples/acceptance/`. Each dry-runs unless passed `--create`.
+`examples/quickstart.py` is the README recipe. Acceptance scripts live in `examples/acceptance/`. Each dry-runs unless passed `--create`.
+
+## README quickstart
+
+One on-demand H100 job. In `eu-north1`, `gpu="h100"` selects `gpu-h100-sxm` and `1gpu-16vcpu-200gb`. Omit `gpu` for a CPU machine (`cpu-d3`, `2vcpu-8gb`). `pricing="spot"` on that machine raises `UnsupportedFeature`.
+
+```python
+import nebius_serverless as ns
+
+job = ns.Job(
+    ["nvidia-smi"],
+    image="nvidia/cuda:13.1.1-runtime-ubuntu24.04",
+    gpu="h100",
+    timeout="1h",
+)
+print(job.create(dry_run=True))
+
+run = job.create()
+print(run.id)
+record = run.get()
+record = run.wait()
+saved_id = run.id
+loaded = ns.jobs.get(saved_id)
+print(loaded.status)
+```
+
+```bash
+python examples/quickstart.py
+python examples/quickstart.py --create
+```
+
+`--create` waits until `status.state` is `COMPLETED`, then reloads the id. Pass `--region` and `--project` when the profile does not supply them.
 
 ## Short job
 
-One on-demand GPU job. The cookbook quickstart uses a 15-minute timeout. This client sends `1h`, the API minimum, and does not clamp `15m` up.
+The cookbook first job. `gpu="l40s"` is that machine: in `eu-north1` it selects `gpu-l40s-a` and `1gpu-8vcpu-32gb`. The cookbook uses a 15-minute timeout. This client sends `1h`, the API minimum, and does not clamp `15m` up.
 
 ```python
 import nebius_serverless as ns
@@ -16,8 +47,7 @@ import nebius_serverless as ns
 job = ns.Job(
     ["bash", "-c", "nvidia-smi"],
     image="nvidia/cuda:13.1.1-runtime-ubuntu24.04",
-    platform="gpu-l40s-a",
-    preset="1gpu-8vcpu-32gb",
+    gpu="l40s",
     timeout="1h",
     name="my-job",
 )
@@ -36,8 +66,7 @@ schema_version: 1
 kind: job
 image: nvidia/cuda:13.1.1-runtime-ubuntu24.04
 command: ["bash", "-c", "nvidia-smi"]
-platform: gpu-l40s-a
-preset: 1gpu-8vcpu-32gb
+gpu: l40s
 timeout: 1h
 name: my-job
 ```
@@ -56,32 +85,15 @@ python examples/acceptance/nvidia_smi.py --create --profile my-profile --project
 
 `--create` waits until `status.state` is `COMPLETED`.
 
-## Alias instead of a platform id
-
-Omit `platform` and `preset` and pass `gpu`. In `eu-north1`, `gpu="h100"` selects `gpu-h100-sxm` and `1gpu-16vcpu-200gb`.
-
-```python
-job = ns.Job(
-    ["nvidia-smi"],
-    image="nvidia/cuda:13.1.1-runtime-ubuntu24.04",
-    gpu="h100",
-    timeout="1h",
-)
-print(job.create(dry_run=True, region="eu-north1", project="project-id"))
-```
-
-Omit `gpu` for a CPU machine (`cpu-d3`, `2vcpu-8gb`). `pricing="spot"` on that machine raises `UnsupportedFeature`.
-
 ## Spot job with a larger disk
 
-One spot GPU job. The full cookbook command is `examples/acceptance/axolotl_lora.py`. Shared memory stays the `16Gi` default. The published command does not mount a volume.
+One spot GPU job. The full cookbook command is `examples/acceptance/axolotl_lora.py`. In `eu-north1`, `gpu="h100"` selects `gpu-h100-sxm` and `1gpu-16vcpu-200gb`. Shared memory stays the `16Gi` default. The published command does not mount a volume.
 
 ```python
 job = ns.Job(
     ["bash", "-lc", "axolotl train /workspace/data/config.yaml"],
     image="docker.io/axolotlai/axolotl:main-20260309-py3.11-cu128-2.9.1",
-    platform="gpu-h100-sxm",
-    preset="1gpu-16vcpu-200gb",
+    gpu="h100",
     pricing="spot",
     disk="500Gi",
     timeout="24h",

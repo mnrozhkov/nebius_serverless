@@ -114,9 +114,11 @@ class Job:
         """Create a cloud job, or return the request when ``dry_run``.
 
         ``dry_run=True`` resolves project and region and does not call
-        create. A live call returns a ``Run`` after the id is known and
-        does not wait for the container to finish. A second call starts
-        another cloud job.
+        create. Region comes from ``region=`` or the profile when either
+        names one, otherwise from the project's ``spec.region``. A live
+        call returns a ``Run`` after the id is known and does not wait
+        for the container to finish. A second call starts another cloud
+        job.
         """
         reject_running_loop("create_async")
         return self._create(
@@ -227,6 +229,10 @@ def _location(
             project_id = loaded_project
         if region_id is None:
             region_id = loaded_region
+    if region_id is None:
+        from .sdk_transport import project_region
+
+        region_id = project_region(profile, project_id)
     return project_id, region_id
 
 

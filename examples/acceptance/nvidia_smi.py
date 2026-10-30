@@ -2,8 +2,9 @@
 
 Matches the create command in
 https://github.com/nebius/serverless-ai-cookbook/blob/main/quickstarts/first-job.md
-The cookbook passes --timeout 15m. The Jobs API minimum is 1 hour, so this
-script sends 1h. Dry-run is the default. --create submits and waits.
+``gpu="l40s"`` is that machine. The cookbook passes --timeout 15m. The
+Jobs API minimum is 1 hour, so this script sends 1h. Dry-run is the
+default. --create submits and waits.
 """
 
 import argparse
@@ -21,8 +22,7 @@ def main() -> None:
     job = ns.Job(
         ["bash", "-c", "nvidia-smi"],
         image="nvidia/cuda:13.1.1-runtime-ubuntu24.04",
-        platform="gpu-l40s-a",
-        preset="1gpu-8vcpu-32gb",
+        gpu="l40s",
         timeout="1h",
         name="my-job",
         **profile_kwargs(args),

@@ -15,10 +15,11 @@ AXOLOTL = "docker.io/axolotlai/axolotl:main-20260309-py3.11-cu128-2.9.1"
 
 def _load(name: str) -> object:
     sys.path.insert(0, str(ACCEPTANCE))
-    spec = importlib.util.spec_from_file_location(
-        name,
-        ACCEPTANCE / f"{name}.py",
-    )
+    return _load_path(ACCEPTANCE / f"{name}.py")
+
+
+def _load_path(path: Path) -> object:
+    spec = importlib.util.spec_from_file_location(path.stem, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -59,6 +60,37 @@ def test_readme_points_at_the_contract() -> None:
     lowered = text.lower()
     assert "local backend" not in lowered
     assert "live nebius run" not in lowered
+
+
+def test_examples_pass_gpu_aliases() -> None:
+    for path in (ROOT / "examples").rglob("*"):
+        if path.suffix not in {".py", ".yaml"}:
+            continue
+        text = path.read_text(encoding="utf-8")
+        assert "platform=" not in text
+        assert "preset=" not in text
+        assert "\nplatform:" not in text
+        assert "\npreset:" not in text
+
+
+def test_quickstart_dry_run(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _profile(monkeypatch)
+    module = _load_path(ROOT / "examples" / "quickstart.py")
+    monkeypatch.setattr(sys, "argv", ["quickstart.py"])
+    module.main()
+    printed = _printed(capsys)
+    assert len(printed) == 1
+    request = printed[0]
+    assert request["image"] == CUDA
+    assert request["command"] == ["nvidia-smi"]
+    assert "args" not in request
+    assert request["platform"] == "gpu-h100-sxm"
+    assert request["preset"] == "1gpu-16vcpu-200gb"
+    assert request["timeout"] == 3600
+    assert request["pricing"] == "on-demand"
 
 
 def test_short_job_yaml_matches_the_constructor(

@@ -13,6 +13,7 @@ from .errors import (
     CapacityError,
     SubmissionUncertain,
     TransportError,
+    ValidationError,
 )
 from .recipe import disk_bytes
 from .transport import CreateResult
@@ -143,21 +144,140 @@ class SdkTransport:
 
     def _client(self) -> object:
         if self._sdk is None:
-            from nebius.aio.cli_config import Config
-            from nebius.sdk import SDK
-
-            kwargs: dict[str, object] = {
-                "config_reader": Config(profile=self._profile),
-                "user_agent_prefix": _USER_AGENT,
-            }
-            if self._project:
-                kwargs["parent_id"] = self._project
-            sdk = SDK(**kwargs)
+            sdk = open_sdk(self._profile, self._project)
             atexit.register(sdk.sync_close)
             self._sdk = sdk
         from nebius.api.nebius.ai.v1 import JobServiceClient
 
         return JobServiceClient(self._sdk)
+
+
+def open_sdk(profile: str | None, project: str | None) -> object:
+    """Open an SDK for this profile.
+
+    A CLI profile that authenticates with federation and omits
+    ``federation-id`` uses the cached CLI token. The API host is the
+    profile endpoint without a port, so service routes stay on
+    ``cpl.<service>.<endpoint>``.
+    """
+    try:
+        from nebius.aio.cli_config import Config
+        from nebius.sdk import SDK
+    except ImportError:
+        raise ValidationError(
+            "The Nebius SDK is required to resolve a profile.",
+            operation="create",
+        ) from None
+    config = Config(profile=profile)
+    kwargs: dict[str, object] = {"user_agent_prefix": _USER_AGENT}
+    if project:
+        kwargs["parent_id"] = project
+    profile_body = getattr(config, "_profile", {})
+    federation = (
+        isinstance(profile_body, dict)
+        and profile_body.get("auth-type") == "federation"
+        and "federation-id" not in profile_body
+    )
+    if federation:
+        return SDK(
+            credentials=_cached_federation(config),
+            domain=_domain(config),
+            **kwargs,
+        )
+    return SDK(config_reader=config, **kwargs)
+
+
+def project_region(profile: str | None, project_id: str) -> str:
+    """Return ``spec.region`` for an IAM v2 project."""
+    try:
+        from nebius.aio.service_error import RequestError
+        from nebius.api.nebius.iam.v2 import (
+            GetProjectRequest,
+            ProjectServiceClient,
+        )
+    except ImportError:
+        raise ValidationError(
+            "The Nebius SDK is required to resolve a profile.",
+            operation="create",
+        ) from None
+    sdk = open_sdk(profile, project_id)
+    try:
+        try:
+            project = (
+                ProjectServiceClient(sdk)
+                .get(GetProjectRequest(id=project_id))
+                .wait()
+            )
+        except RequestError as exc:
+            _raise_project(exc, project_id)
+    finally:
+        sdk.sync_close()
+    region = getattr(getattr(project, "spec", None), "region", None)
+    if not isinstance(region, str) or region.strip() == "":
+        raise ValidationError(
+            "The project has no region.",
+            operation="create",
+            project=project_id,
+        )
+    return region.strip()
+
+
+def _domain(config: object) -> str:
+    endpoint_of = getattr(config, "endpoint", None)
+    endpoint = endpoint_of() if callable(endpoint_of) else ""
+    host = (endpoint or "").split("://")[-1].split("/")[0]
+    if host.endswith(":443"):
+        host = host[: -len(":443")]
+    return host or "api.nebius.cloud"
+
+
+def _cached_federation(config: object) -> object:
+    from nebius.aio.token.file_cache.file_bearer import (
+        PureFileCacheBearer,
+    )
+
+    profile = getattr(config, "_profile", {})
+    endpoint = None
+    if isinstance(profile, dict):
+        endpoint = profile.get("federation-endpoint")
+    name_of = getattr(config, "profile_name", None)
+    name = name_of() if callable(name_of) else None
+    if (
+        not isinstance(profile, dict)
+        or profile.get("auth-type") != "federation"
+        or not isinstance(endpoint, str)
+        or endpoint.strip() == ""
+        or not isinstance(name, str)
+        or name.strip() == ""
+    ):
+        raise ValidationError(
+            "Project or region configuration is missing or ambiguous.",
+            operation="create",
+        )
+    federation_id = profile.get("federation-id") or ""
+    if not isinstance(federation_id, str):
+        raise ValidationError(
+            "Project or region configuration is missing or ambiguous.",
+            operation="create",
+        )
+    cache_name = f"federation/{endpoint.strip()}/{federation_id}/{name}"
+    return PureFileCacheBearer(cache_name)
+
+
+def _raise_project(exc: object, project_id: str) -> None:
+    status = getattr(exc, "status", None)
+    code = getattr(getattr(status, "code", None), "name", "")
+    if code in {"UNAUTHENTICATED", "PERMISSION_DENIED"}:
+        raise AccessError(
+            "Authentication or permission failed.",
+            operation="create",
+            project=project_id,
+        ) from None
+    raise TransportError(
+        "The project lookup failed.",
+        operation="create",
+        project=project_id,
+    ) from None
 
 
 def build_create_request(body: Mapping[str, object]) -> object:

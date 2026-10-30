@@ -4,27 +4,29 @@ Python client for Nebius Serverless AI Jobs.
 
 ## Installation
 
-Python 3.10 or later. From a checkout of this repo:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e .
-```
-
-On Windows, activate with `.venv\Scripts\activate`.
-
-`pip install -e .` installs this package and the pinned dependencies `nebius==0.6.27` and `PyYAML==6.0.3`.
-
-To install the locked test and lint tools as well, from the same checkout:
+Python 3.10 or later. [uv](https://docs.astral.sh/uv/) installs that interpreter, this package, and the lockfile. From a checkout of this repo:
 
 ```bash
 uv sync
 ```
 
-A Nebius CLI profile is required for `create()` and `jobs.get()`. Configure one with [`nebius profile create`](https://docs.nebius.com/cli/configure). The active profile supplies the project id and region. `profile=` and `project=` on `Job` select or override them. Constructing a `Job` does not read that profile.
+`uv sync` installs this package, the pinned dependencies `nebius==0.6.27` and `PyYAML==6.0.3`, and the locked test and lint tools.
+
+Run the client and the acceptance scripts with `uv run`:
+
+```bash
+uv run python
+uv run python examples/quickstart.py
+uv run python examples/quickstart.py --create
+uv run python examples/acceptance/nvidia_smi.py
+uv run python examples/acceptance/nvidia_smi.py --create
+```
+
+A Nebius CLI profile is required for `create()` and `jobs.get()`. Configure one with [`nebius profile create`](https://docs.nebius.com/cli/configure). The active profile supplies the project id. When that profile does not name a region, `create()` reads it from the project (`spec.region` in the Nebius Python SDK). `profile=`, `project=`, and `region=` select or override them. Constructing a `Job` does not read that profile.
 
 The alias table is in [specs/cloud-jobs.md](specs/cloud-jobs.md). Logs are `nebius ai job logs <id>`. This library does not stream logs.
+
+`examples/quickstart.py` is the recipe below. It dry-runs unless passed `--create`. `--create` submits, waits until the job finishes, and reloads the id. Pass `--region` and `--project` when the profile does not supply them.
 
 ```python
 import nebius_serverless as ns

@@ -108,11 +108,11 @@ job.create(
 
 `create()` blocks until Nebius has accepted the job and the id is known, then returns a `Run`. It does not wait for the container to finish.
 
-`create(dry_run=True)` builds the request, returns that description, and does not call create. Project and region come from `project=` / `region=` when passed, otherwise from the active SDK profile (`profile=` on the `Job` selects it). A missing or ambiguous project or region raises `ValidationError` before create.
+`create(dry_run=True)` builds the request, returns that description, and does not call create. Project and region come from `project=` / `region=` when passed, otherwise from the active SDK profile (`profile=` on the `Job` selects it). When the project id is known and the profile does not name a region, the region is `spec.region` from IAM v2 `ProjectService.get`. That read is not a job create. A missing or ambiguous project, or a project with no region, raises `ValidationError` before create.
 
 The description includes `image`, `command`, `args` when present, `project`, `region`, `platform`, `preset`, `timeout` (seconds), `pricing`, `subnet_id` when set, `volumes` when set, `env` (key names only), `name`, `disk`, and `shm`. Env values are not included.
 
-`region` is the project region used to resolve a `gpu` alias. Pass it when you already know it and do not want a profile lookup. `project` on this call overrides `Job.project`.
+`region` is the project region used to resolve a `gpu` alias. Pass it to skip the project lookup. `project` on this call overrides `Job.project`.
 
 An optional `transport=` keyword replaces the Nebius SDK client. Tests use it. Scripts leave it unset.
 

@@ -33,8 +33,7 @@ def main() -> None:
     job = ns.Job(
         COMMAND,
         image=IMAGE,
-        platform="gpu-h100-sxm",
-        preset="1gpu-16vcpu-200gb",
+        gpu="h100",
         pricing="spot",
         disk="500Gi",
         timeout="24h",
