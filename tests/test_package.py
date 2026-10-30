@@ -31,8 +31,14 @@ def test_public_surface() -> None:
         "UnsupportedFeature",
         "ValidationError",
         "WaitTimeout",
+        "configure_logging",
+        "diagnostics",
         "jobs",
     ]
     for name in ("submit", "plan", "result", "refresh"):
         assert name not in ns.__all__
         assert not hasattr(ns, name)
+    assert "output" not in ns.__all__
+    assert callable(ns.configure_logging)
+    assert callable(ns.diagnostics)
+    assert not hasattr(ns, "quiet")

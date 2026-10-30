@@ -5,6 +5,7 @@ Imported on the call that needs it. ``Job()`` does not import this module.
 
 import atexit
 import json
+import time
 from collections.abc import Mapping
 from datetime import timedelta
 
@@ -14,6 +15,7 @@ from .errors import (
     SubmissionUncertain,
     TransportError,
     ValidationError,
+    exposed_request_id,
 )
 from .recipe import disk_bytes
 from .transport import CreateResult
@@ -58,28 +60,13 @@ class SdkTransport:
             ).wait()
         except RequestError as exc:
             return _from_request(exc, sent=False)
-        except Exception:
-            return CreateResult(accepted=False, failure="transport")
-        try:
-            operation.sync_wait()
-        except RequestError as exc:
-            if _resource_id(operation):
-                return CreateResult(
-                    resource_id=_resource_id(operation),
-                    accepted=True,
-                )
-            return _from_request(exc, sent=True)
-        except Exception:
-            if _resource_id(operation):
-                return CreateResult(
-                    resource_id=_resource_id(operation),
-                    accepted=True,
-                )
-            return CreateResult(accepted=True, failure="uncertain")
-        resource_id = _resource_id(operation)
-        if not resource_id:
-            return CreateResult(accepted=True, failure="uncertain")
-        return CreateResult(resource_id=resource_id, accepted=True)
+        except Exception as exc:
+            return CreateResult(
+                accepted=False,
+                failure="transport",
+                request_id=exposed_request_id(exc),
+            )
+        return _result_when_id_known(operation)
 
     def get(self, job_id: str) -> dict[str, object]:
         """Fetch one job and return its JSON object."""
@@ -96,11 +83,12 @@ class SdkTransport:
             job = self._client().get(GetJobRequest(id=job_id)).wait()
         except RequestError as exc:
             _raise_call(exc, operation="get", job_id=job_id)
-        except Exception:
+        except Exception as exc:
             raise TransportError(
                 "The get call failed.",
                 operation="get",
                 run_id=job_id,
+                request_id=exposed_request_id(exc),
             ) from None
         payload = json.loads(
             job.to_json(preserving_proto_field_name=True)
@@ -131,11 +119,12 @@ class SdkTransport:
             operation.sync_wait()
         except RequestError as exc:
             _raise_call(exc, operation="cancel", job_id=job_id)
-        except Exception:
+        except Exception as exc:
             raise TransportError(
                 "The cancel call failed.",
                 operation="cancel",
                 run_id=job_id,
+                request_id=exposed_request_id(exc),
             ) from None
         return {
             "id": job_id,
@@ -267,16 +256,19 @@ def _cached_federation(config: object) -> object:
 def _raise_project(exc: object, project_id: str) -> None:
     status = getattr(exc, "status", None)
     code = getattr(getattr(status, "code", None), "name", "")
+    request_id = exposed_request_id(exc)
     if code in {"UNAUTHENTICATED", "PERMISSION_DENIED"}:
         raise AccessError(
             "Authentication or permission failed.",
             operation="create",
             project=project_id,
+            request_id=request_id,
         ) from None
     raise TransportError(
         "The project lookup failed.",
         operation="create",
         project=project_id,
+        request_id=request_id,
     ) from None
 
 
@@ -393,7 +385,7 @@ def _from_request(exc: object, *, sent: bool) -> CreateResult:
     status = getattr(exc, "status", None)
     code = getattr(getattr(status, "code", None), "name", "")
     errors = getattr(status, "service_errors", ()) or ()
-    return classify_code(
+    result = classify_code(
         str(code),
         sent=sent,
         conflict_id=_conflict_id(errors),
@@ -402,6 +394,17 @@ def _from_request(exc: object, *, sent: bool) -> CreateResult:
             ("not_enough_resources", "quota_failure"),
         ),
         access=_has_detail(errors, ("permission_denied",)),
+    )
+    request_id = exposed_request_id(exc)
+    if request_id is None:
+        return result
+    return CreateResult(
+        resource_id=result.resource_id,
+        accepted=result.accepted,
+        state=result.state,
+        failure=result.failure,
+        conflict_id=result.conflict_id,
+        request_id=request_id,
     )
 
 
@@ -425,29 +428,94 @@ def _conflict_id(errors: object) -> str | None:
 
 def _raise_call(exc: object, *, operation: str, job_id: str) -> None:
     result = _from_request(exc, sent=True)
+    request_id = result.request_id
     if result.failure == "access":
         raise AccessError(
             "Authentication or permission failed.",
             operation=operation,
             run_id=job_id,
+            request_id=request_id,
         ) from None
     if result.failure == "capacity":
         raise CapacityError(
             "The API rejected the job for quota or capacity.",
             operation=operation,
             run_id=job_id,
+            request_id=request_id,
         ) from None
     if result.failure == "uncertain":
         raise SubmissionUncertain(
             "Create may have been accepted and the id is unknown.",
             operation=operation,
             run_id=job_id,
+            request_id=request_id,
         ) from None
     raise TransportError(
         "The call failed.",
         operation=operation,
         run_id=job_id,
+        request_id=request_id,
     ) from None
+
+
+def _result_when_id_known(operation: object) -> CreateResult:
+    """Return once the job id is known.
+
+    ``Operation.sync_wait`` polls until the operation is terminal. For a
+    job, that is when the container finishes. This stops at the id.
+    """
+    found = _resource_id(operation)
+    if found:
+        return CreateResult(resource_id=found, accepted=True)
+    while True:
+        if _operation_done(operation):
+            return _result_after_terminal(operation)
+        try:
+            _sync_update(operation)
+        except Exception as exc:
+            found = _resource_id(operation)
+            request_id = exposed_request_id(exc)
+            if found:
+                return CreateResult(
+                    resource_id=found,
+                    accepted=True,
+                    request_id=request_id,
+                )
+            return CreateResult(
+                accepted=True,
+                failure="uncertain",
+                request_id=request_id,
+            )
+        found = _resource_id(operation)
+        if found:
+            return CreateResult(resource_id=found, accepted=True)
+        if _operation_done(operation):
+            return _result_after_terminal(operation)
+        time.sleep(1)
+
+
+def _sync_update(operation: object) -> None:
+    update = getattr(operation, "sync_update", None)
+    if not callable(update):
+        raise TransportError(
+            "The create call failed before the job id was known.",
+            operation="create",
+        )
+    update()
+
+
+def _operation_done(operation: object) -> bool:
+    done = getattr(operation, "done", None)
+    if not callable(done):
+        return False
+    return bool(done())
+
+
+def _result_after_terminal(operation: object) -> CreateResult:
+    found = _resource_id(operation)
+    if found:
+        return CreateResult(resource_id=found, accepted=True)
+    return CreateResult(accepted=True, failure="uncertain")
 
 
 def _resource_id(operation: object) -> str | None:

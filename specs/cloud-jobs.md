@@ -80,9 +80,11 @@ run = job.create()
 
 There is no `submit()`, `plan()`, `result()`, or `refresh()`. There is no `Run` method named `get` that differs from `ns.jobs.get`. `run.get()` and `ns.jobs.get(run.id)` perform one `nebius ai job get`.
 
-`create()` blocks until Nebius has accepted the job and the id is known, then returns the `Run`. It does not block for the container to finish.
+`create()` blocks until Nebius has accepted the job and the id is known, then returns the `Run`. It does not block for the container to finish. It prints one submission line. `get`, `wait`, and `cancel` print progress on their own. `quiet=True` on one of those calls, or on `jobs.get`, suppresses progress for that call only. It is not stored on the `Run`, it does not suppress exceptions or diagnostic logs, and it is not sent to Nebius.
 
-`create(dry_run=True)` builds the create request, returns that description, and does not call create. The description includes image, command, args, project, region, platform, preset, timeout, pricing, subnet if set, volumes, env key names, and the generated name. It does not include env values.
+`create(dry_run=True)` builds the create request, returns that description, and does not call create. It prints nothing. The description includes image, command, args, project, region, platform, preset, timeout, pricing, subnet if set, volumes, env key names, and the generated name. It does not include env values.
+
+Rich is a normal dependency. An interactive terminal shows a spinner. A notebook, CI (`CI`, `GITHUB_ACTIONS`, `GITLAB_CI`), a pipe, or a dumb terminal uses append-only lines. `configure_logging(level=...)` enables diagnostics on the `nebius_serverless` logger separately. `diagnostics()` returns the package version, the Python version, the platform, and `presentation` (`plain` or `interactive`) for the current stderr. A local timeout or an interrupted observation does not cancel the remote job. SDK progress is not the container log. That remains `nebius ai job logs <id>`.
 
 ### Async
 
@@ -151,15 +153,15 @@ Allowed keys: `schema_version`, `kind`, `image`, `command`, `gpu`, `platform`, `
 
 | Call | CLI | Behavior |
 | --- | --- | --- |
-| `job.create()` | `ai job create` | Returns a `Run` after the job id is known. |
-| `run.get()` | `ai job get` | One fetch. Returns the job JSON: state plus submitted params. |
-| `ns.jobs.get(id)` | `ai job get` | Same fetch, starting from an id string. Returns a `Run`. |
-| `run.wait(timeout=None)` | none | Polls `get` until the state is terminal. Returns that JSON. |
-| `run.cancel()` | `ai job cancel` | Requests cancellation. Returns when the request is accepted. Does not claim the container has stopped. |
+| `job.create()` | `ai job create` | Returns a `Run` after the job id is known. Prints one submission line. `quiet=True` suppresses it for that call. |
+| `run.get()` | `ai job get` | One fetch. Returns the job JSON: state plus submitted params. Prints one snapshot. `quiet=True` suppresses it for that call. |
+| `ns.jobs.get(id)` | `ai job get` | Same fetch, starting from an id string. Returns a `Run`. Prints one snapshot. `quiet=True` suppresses it for that call. |
+| `run.wait(timeout=None)` | none | Polls `get` until the state is terminal. Returns that JSON. Prints the observation and one outcome. `quiet=True` suppresses it for that call. |
+| `run.cancel()` | `ai job cancel` | Requests cancellation. Returns when the request is accepted. Does not claim the container has stopped. Prints that the request was accepted. `quiet=True` suppresses it for that call. |
 
 `run.id` is the Nebius job id. Property reads do not perform I/O. The last fetched JSON is available as `run.record` after `get` or `wait`. `run.status` is the state field of that record. Before the first successful fetch after create, `status` is the state from the create response.
 
-`wait(timeout=0)` performs one fetch and, when the state is not terminal, raises `WaitTimeout` with the job id. `wait(timeout=seconds)` stops the local poll. Neither form cancels the cloud job.
+`wait(timeout=0)` performs one fetch and, when the state is not terminal, raises `WaitTimeout` with the job id. `wait(timeout=seconds)` stops the local poll. Neither form cancels the cloud job. Local waiting stopped, no cancellation was requested, and the job may still be running. Reload it with `jobs.get(id)` or call `cancel`. The awaited twins take the same `quiet=True`.
 
 `FAILED`, `CANCELLED`, and a platform timeout are values in the job JSON. `get` and `wait` return that JSON. They do not raise because the container exited badly. There is no workload return value and no manifest proof.
 
@@ -213,9 +215,11 @@ Exceptions are `nebius_serverless` types. They include the operation and the job
 | `AccessError` | Authentication or permission failure from the SDK. |
 | `CapacityError` | The API rejected the job for quota or capacity. |
 | `TransportError` | The call failed and there is no reason to think create was accepted. |
-| `SubmissionUncertain` | Create may have been accepted and the id is unknown. |
+| `SubmissionUncertain` | The outcome of create is unknown. The client does not send a second create. |
 | `KeyConflict` | The API reports an existing resource for this create and its id is known. |
-| `WaitTimeout` | The local wait ended. The cloud job is unchanged. |
+| `WaitTimeout` | Local waiting stopped. No cancellation was requested. The job may still be running. |
+
+Each class has a stable `code`: `validation`, `unsupported`, `access`, `capacity`, `transport`, `submission_uncertain`, `key_conflict`, `wait_timeout`. These are SDK categories, not backend reason codes. `request_id` is set only when the Nebius exception already exposes one. `AccessError`, `CapacityError`, and `KeyConflict` each carry one recovery sentence for that failure.
 
 ## 11. Out of this slice
 
@@ -232,7 +236,7 @@ Job logs remain `nebius ai job logs <id>`. The README states that command. The l
 
 ## 12. Package
 
-The import name stays `nebius_serverless`. The distribution stays installable with pip. Public exports for this slice are `Job`, `jobs`, `Run`, and the errors in section 10. The dependency on the official Nebius Python SDK is required for a real create. Normalization tests run without credentials by injecting a fake transport. A missing SDK or a missing profile fails at `create()`, not at import, when the test transport is absent. `dry_run=True` still resolves the profile far enough to show project and region, and skips create.
+The import name stays `nebius_serverless`. The distribution stays installable with pip. Public exports for this slice are `Job`, `jobs`, `Run`, `configure_logging`, `diagnostics`, and the errors in section 10. The dependency on the official Nebius Python SDK is required for a real create. Rich is a required dependency, pinned the same way, not an optional extra. Normalization tests run without credentials by injecting a fake transport. A missing SDK or a missing profile fails at `create()`, not at import, when the test transport is absent. `dry_run=True` still resolves the profile far enough to show project and region, and skips create. Importing the package does not configure logging, write output, or open a console.
 
 `src/nebius_serverless`, `tests/`, and `examples/` follow PEP 8. Ruff is the check: pycodestyle, Pyflakes, import order, and a 79-character line. `ruff check src tests examples` passes before the slice is accepted. There is no formatter config that widens that line.
 
@@ -242,31 +246,28 @@ The package is a `src` layout declared in `pyproject.toml`. `Job()` does not imp
 
 ## 13. Acceptance scenarios
 
-The slice is accepted when the three scripts in `examples/acceptance/` succeed against an authorized project. Each script dry-runs unless it is passed `--create`. `--create` is the live run. The short job and the Axolotl job pass `gpu`. That alias resolves to the platform and preset from their cookbook commands. The line-count script uses `h100` unless `--gpu` says otherwise, and that alias must exist in the project region. `examples/quickstart.py` is the section 2 recipe.
+The slice is accepted when `examples/job_quickstart.py` and the scripts under `examples/from_yaml/`, `examples/train/`, and `examples/batch/` succeed against an authorized project. Each script calls `create()` and uses the active profile. Settings other than a YAML path are written in the Python file. `examples/from_yaml/nvidia_smi_yaml.py` takes `--config` and loads that file. The quickstart and the Axolotl job pass `gpu`. That alias resolves to a platform and preset. The matrix script passes `gpu="h100"`, and that alias must exist in the project region. `examples/job_quickstart.py` is the section 2 recipe.
 
 A scenario succeeds when every `run.wait()` returns job JSON whose `status.state` is `COMPLETED`. The CLI documents that state for a successful job. The package does not upload objects and does not read them back. Where a scenario uses a bucket, the script talks to Object Storage with the AWS CLI. The endpoint is `https://storage.<region>.nebius.cloud`.
 
 ### 1. Short job
 
-`examples/acceptance/nvidia_smi.py` matches the [first-job quickstart](https://github.com/nebius/serverless-ai-cookbook/blob/main/quickstarts/first-job.md) create command. It is one on-demand job.
+`examples/job_quickstart.py` is the section 2 recipe. It is one on-demand job. `examples/from_yaml/nvidia_smi_yaml.py --config examples/from_yaml/nvidia_smi.yaml` loads that file and runs the same recipe.
 
 | Field | Value |
 | --- | --- |
 | image | `nvidia/cuda:13.1.1-runtime-ubuntu24.04` |
-| command | `["bash", "-c", "nvidia-smi"]` |
-| gpu | `l40s` |
-| platform | `gpu-l40s-a`, resolved from `l40s` |
-| preset | `1gpu-8vcpu-32gb`, resolved from `l40s` |
+| command | `["nvidia-smi"]` |
+| gpu | `h100` |
+| platform | `gpu-h100-sxm`, resolved from `h100` in `eu-north1` |
+| preset | `1gpu-16vcpu-200gb`, resolved from `h100` in `eu-north1` |
 | timeout | `1h` |
-| name | `my-job` |
 
-`command` is the quickstart's `--container-command bash --args "-c nvidia-smi"`. The quickstart passes `--timeout 15m`. The Jobs API minimum is 1 hour, so this client sends `1h` and does not clamp `15m` up. The script does not call get-by-name. It uses the id from `create()`.
-
-`examples/acceptance/nvidia_smi.yaml` is the same recipe through `Job.from_yaml`. The live run uses the Python script. Offline, `from_yaml` and the constructor produce the same create request.
+The script does not call get-by-name. It uses the id from `create()`. Offline, `from_yaml` and the constructor produce the same create request, apart from the generated name.
 
 ### 2. Axolotl fine-tune
 
-`examples/acceptance/axolotl_lora.py` matches the [Axolotl cookbook](https://github.com/nebius/serverless-ai-cookbook/tree/main/templates/job-axolotl-finetune) create command. One spot GPU job. The shell downloads the cookbook Qwen2.5-0.5B config, trains it, and copies checkpoints to `/workspace/data/output/<run id>`.
+`examples/train/axolotl_lora.py` matches the [Axolotl cookbook](https://github.com/nebius/serverless-ai-cookbook/tree/main/templates/job-axolotl-finetune) create command. One spot GPU job. The shell downloads the cookbook Qwen2.5-0.5B config, trains it, and copies checkpoints to `/workspace/data/output/<run id>`.
 
 | Field | Value |
 | --- | --- |
@@ -281,18 +282,16 @@ A scenario succeeds when every `run.wait()` returns job JSON whose `status.state
 
 `spot` is `--preemptible --follows-spot-price`. Shared memory stays the 16 GiB adapter default, which is the cookbook `--shm-size 16Gi`. The cookbook omits `--timeout`. `24h` is that CLI default. The command does not mount a volume, because the published CLI does not pass `--volume`.
 
-### 3. Three GPU jobs over 30 files
+### 3. Three GPU matrix multiplications
 
-`examples/acceptance/line_count.py` prepares the data, then starts three jobs. This is three `Job.create()` calls. It does not add `.map()` or a batch controller.
+`examples/batch/matrix_multiply.py` starts three jobs, then waits and reads a JSON report for each. This is three `Job.create()` calls. It does not add `.map()` or a batch controller. Matrices are generated on the GPU. Object Storage holds only the small reports. No input objects are uploaded.
 
-The script writes 30 text files, 10 per shard:
+| Size | Report |
+| --- | --- |
+| `1024` | `<prefix>/1024.json` |
+| `2048` | `<prefix>/2048.json` |
+| `4096` | `<prefix>/4096.json` |
 
-| Shard | Files | Lines in each file | Report |
-| --- | --- | --- | --- |
-| `shard-0` | 10 | 100 | `1000` |
-| `shard-1` | 10 | 200 | `2000` |
-| `shard-2` | 10 | 300 | `3000` |
+`BUCKET`, `ENDPOINT`, and `GPU` are set in the script. One invocation uses a fresh prefix `matrix-multiply/<uuid>/`. Each job mounts that bucket at `/data` with `s3://<bucket>:/data:rw` and runs `python -c` on the pinned image `pytorch/pytorch@sha256:f894dae26e1ee8557c544f9cfdb9dc011b1552bf3c1e656b422f2e221d380e40`. That digest is the linux/amd64 manifest of `pytorch/pytorch:2.6.0-cuda12.6-cudnn9-runtime`: PyTorch 2.6.0, Python 3.11.11, CUDA 12.6.3. The worker sets `torch.backends.cuda.matmul.allow_tf32 = False` and `torch.set_float32_matmul_precision("highest")`, requires CUDA, and checks a known 2×2 product plus nine sampled entries of the large product. It writes `<prefix>/<size>.json` only after those checks pass. The report has `schema_version` 1, `size`, `gpu`, `elapsed_ms`, `mean`, and `verified` true. `gpu` is `h100`. `timeout` is `1h`. Pricing stays the on-demand default. `ENDPOINT` is `https://storage.eu-north1.nebius.cloud`.
 
-`--create` requires `ACCEPTANCE_BUCKET` and `NEBIUS_REGION`. The script uploads the files with the AWS CLI under a fresh prefix `acceptance/<timestamp>/input/<shard>/`. Each job mounts that bucket at `/data` with `s3://<bucket>:/data:rw` and counts lines in its own shard. The command is `python -c` on `python:3.12-slim`. The report object is `acceptance/<timestamp>/reports/<shard>.txt` and its body is the integer and a newline. `gpu` is the selected alias. `timeout` is `1h`.
-
-The script creates all three jobs, then waits. The scenario succeeds when all three states are `COMPLETED` and the three objects read back as `1000`, `2000`, and `3000`. Cleanup of the jobs remains a manual `nebius ai job delete`. The script does not delete them.
+The script creates all three jobs, then waits. It reads a report only after that job is `COMPLETED`, through the AWS CLI, retrying a missing object for at most 60 seconds. The scenario succeeds when all three states are `COMPLETED` and all three reports validate. The local wait is 5400 seconds and does not cancel the remote job. `timeout` `1h` is the Jobs deadline. Cleanup of the jobs remains a manual `nebius ai job delete`. Deleting that invocation’s prefix is a manual `aws s3 rm`. The script does not delete them. An error stops the script. Jobs already submitted keep running.

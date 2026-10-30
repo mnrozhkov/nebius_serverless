@@ -64,7 +64,7 @@ Follow the library-practice rules in section 12 of the contract. Public callable
 
 Replace the README quickstart with the contract’s script and a `from_yaml` example. State that logs are `nebius ai job logs <id>`. State the alias table by pointing at the spec. Remove the local-backend walkthrough from the first screen.
 
-Add the three scripts in `examples/acceptance/` from section 13 of the contract. They dry-run unless passed `--create`. `nvidia_smi.yaml` is the same recipe as the short job.
+Add `examples/job_quickstart.py` and the scripts under `examples/from_yaml/`, `examples/train/`, and `examples/batch/` from section 13 of the contract. They call `create()` and use the active profile. `examples/from_yaml/nvidia_smi_yaml.py` takes `--config`. `examples/from_yaml/nvidia_smi.yaml` is the same recipe as `job_quickstart.py`.
 
 Do not rewrite the old offline reports to claim live Nebius evidence.
 
@@ -82,11 +82,11 @@ Offline, without credentials:
 - `gpu="b200"` in `me-west1` selects `gpu-b200-sxm-a`. `gpu="h100"` in `us-central1` fails before create.
 - `ruff check src tests examples` passes with the PEP 8 selection in `pyproject.toml`.
 
-Live, only after a person authorizes a project, region, and quota. Run each script with `--create`. The `gpu` alias must exist in that region. All three scenarios succeed:
+Live, only after a person authorizes a project, region, and quota. Run each script. The `gpu` alias must exist in that region. All three scenarios succeed:
 
-1. `examples/acceptance/nvidia_smi.py --create` reaches `COMPLETED`.
-2. `examples/acceptance/axolotl_lora.py --create` reaches `COMPLETED`. The request is the cookbook command: that image, `gpu-h100-sxm`, `1gpu-16vcpu-200gb`, spot, and disk `500Gi`.
-3. `examples/acceptance/line_count.py --create` uploads 30 files (10×100, 10×200, 10×300 lines), starts three GPU jobs, and reads back reports `1000`, `2000`, and `3000`. All three states are `COMPLETED`.
+1. `examples/job_quickstart.py` reaches `COMPLETED`.
+2. `examples/train/axolotl_lora.py` reaches `COMPLETED`. The request is the cookbook command: that image, `gpu-h100-sxm`, `1gpu-16vcpu-200gb`, spot, and disk `500Gi`.
+3. `examples/batch/matrix_multiply.py` submits three GPU jobs for matrix sizes 1024, 2048, and 4096, waits until each is `COMPLETED`, and reads back a validated JSON report for each size. Set `BUCKET` in that file first. The image is the pinned PyTorch digest in section 13. All three states are `COMPLETED`.
 
 Record the job ids. Delete is out of this slice, so cleanup is a manual CLI `nebius ai job delete` noted in the run log, not a library call.
 

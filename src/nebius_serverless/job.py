@@ -1,5 +1,6 @@
 """A local job recipe. Constructing it does not contact Nebius."""
 
+import time
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import timedelta
@@ -7,8 +8,16 @@ from pathlib import Path
 from typing import overload
 
 from .aliases import resolve_machine
-from .errors import UnsupportedFeature
+from .errors import Error, UnsupportedFeature
 from .loop import reject_running_loop
+from .output import (
+    Progress,
+    call_progress,
+    call_progress_async,
+    elapsed_ms,
+    log_transport,
+    report,
+)
 from .profile import load_profile
 from .recipe import (
     check_identity,
@@ -25,8 +34,11 @@ from .recipe import (
     validate_volumes,
 )
 from .run import Run
+from .status import Status
 from .transport import Transport, call_transport
 from .yaml_job import load_yaml_fields
+
+_LOG = "nebius_serverless.job"
 
 
 class Job:
@@ -91,6 +103,7 @@ class Job:
         region: str | None = None,
         project: str | None = None,
         transport: Transport | None = None,
+        quiet: bool = False,
     ) -> Run: ...
 
     @overload
@@ -101,6 +114,7 @@ class Job:
         region: str | None = None,
         project: str | None = None,
         transport: Transport | None = None,
+        quiet: bool = False,
     ) -> dict[str, object]: ...
 
     def create(
@@ -110,6 +124,7 @@ class Job:
         region: str | None = None,
         project: str | None = None,
         transport: Transport | None = None,
+        quiet: bool = False,
     ) -> Run | dict[str, object]:
         """Create a cloud job, or return the request when ``dry_run``.
 
@@ -118,15 +133,22 @@ class Job:
         names one, otherwise from the project's ``spec.region``. A live
         call returns a ``Run`` after the id is known and does not wait
         for the container to finish. A second call starts another cloud
-        job.
+        job. The live call prints one line once the id is known.
+        ``quiet=True`` suppresses that line for this call only.
+        ``dry_run=True`` stays silent. ``quiet`` is not sent to Nebius.
         """
         reject_running_loop("create_async")
-        return self._create(
-            dry_run=dry_run,
-            region=region,
-            project=project,
-            transport=transport,
-        )
+
+        def work(progress: Progress) -> Run | dict[str, object]:
+            return self._create(
+                dry_run=dry_run,
+                region=region,
+                project=project,
+                transport=transport,
+                progress=progress,
+            )
+
+        return call_progress(quiet=quiet, logger_name=_LOG, work=work)
 
     async def create_async(
         self,
@@ -135,19 +157,27 @@ class Job:
         region: str | None = None,
         project: str | None = None,
         transport: Transport | None = None,
+        quiet: bool = False,
     ) -> Run | dict[str, object]:
         """Await the same create as ``create``.
 
         Cancelling this await does not cancel the cloud job.
+        ``quiet=True`` suppresses progress for this call only.
         """
-        import asyncio
 
-        return await asyncio.to_thread(
-            self._create,
-            dry_run=dry_run,
-            region=region,
-            project=project,
-            transport=transport,
+        def work(progress: Progress) -> Run | dict[str, object]:
+            return self._create(
+                dry_run=dry_run,
+                region=region,
+                project=project,
+                transport=transport,
+                progress=progress,
+            )
+
+        return await call_progress_async(
+            quiet=quiet,
+            logger_name=_LOG,
+            work=work,
         )
 
     def _create(
@@ -157,6 +187,7 @@ class Job:
         region: str | None,
         project: str | None,
         transport: Transport | None,
+        progress: Progress,
     ) -> Run | dict[str, object]:
         project_id, region_id = _location(
             profile=self.profile,
@@ -206,9 +237,40 @@ class Job:
             name=self.name,
             disk=self.disk,
         )
-        result = call_transport(chosen, body)
+        started = time.perf_counter()
+        try:
+            result = call_transport(chosen, body)
+        except Error as exc:
+            log_transport(
+                progress,
+                job_id=None,
+                attempt=1,
+                duration_ms=elapsed_ms(started),
+                request_id=exc.request_id,
+            )
+            raise
+        duration_ms = elapsed_ms(started)
+        job_id = result.resource_id or ""
+        log_transport(
+            progress,
+            job_id=job_id,
+            attempt=1,
+            duration_ms=duration_ms,
+            request_id=result.request_id,
+        )
+        report(
+            Status(
+                kind="submitted",
+                job_id=job_id,
+                name=self.name,
+                state=result.state,
+                duration_ms=duration_ms,
+                request_id=result.request_id,
+            ),
+            progress,
+        )
         return Run(
-            result.resource_id or "",
+            job_id,
             name=self.name,
             transport=chosen,
             create_state=result.state,

@@ -1,0 +1,8 @@
+[project]
+name = "nebius-serverless-modal-examples"
+version = "0.0.1"
+description = "Isolated Modal comparison examples for nebius_serverless"
+requires-python = ">=3.10"
+dependencies = [
+    "modal==1.6.3",
+]

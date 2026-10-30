@@ -16,6 +16,7 @@ from .errors import (
     WaitTimeout,
 )
 from .job import Job
+from .log import configure_logging, diagnostics
 from .run import Run, jobs
 
 __version__ = "0.0.1"
@@ -32,5 +33,7 @@ __all__ = [
     "UnsupportedFeature",
     "ValidationError",
     "WaitTimeout",
+    "configure_logging",
+    "diagnostics",
     "jobs",
 ]

@@ -1,18 +1,15 @@
-"""Acceptance scenario 2: the cookbook Axolotl job.
+"""Fine-tune with the cookbook Axolotl job.
 
 Matches the create command in
 https://github.com/nebius/serverless-ai-cookbook/tree/main/templates/job-axolotl-finetune
-The cookbook omits --timeout. 24h is that CLI default. Dry-run is the
-default. --create submits and waits.
+The cookbook omits --timeout. 24h is that CLI default. Uses the active
+Nebius profile.
 """
-
-import argparse
-
-from _common import add_run_arguments, profile_kwargs, require_completed
 
 import nebius_serverless as ns
 
 IMAGE = "docker.io/axolotlai/axolotl:main-20260309-py3.11-cu128-2.9.1"
+GPU = "h100"
 COMMAND = [
     "bash",
     "-lc",
@@ -29,30 +26,20 @@ COMMAND = [
 
 
 def main() -> None:
-    args = _parser().parse_args()
+    """Create the Axolotl job and wait for it."""
     job = ns.Job(
         COMMAND,
         image=IMAGE,
-        gpu="h100",
+        gpu=GPU,
         pricing="spot",
         disk="500Gi",
         timeout="24h",
-        **profile_kwargs(args),
     )
-    if not args.create:
-        print(job.create(dry_run=True))
-        return
     run = job.create()
     print(run.id)
-    require_completed(run, run.wait())
-
-
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Fine-tune Qwen2.5-0.5B with the Axolotl cookbook.",
-    )
-    add_run_arguments(parser)
-    return parser
+    run.wait()
+    if run.status != "COMPLETED":
+        raise SystemExit(f"{run.id} ended {run.status}")
 
 
 if __name__ == "__main__":

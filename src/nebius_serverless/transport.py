@@ -11,6 +11,7 @@ from .errors import (
     KeyConflict,
     SubmissionUncertain,
     TransportError,
+    exposed_request_id,
 )
 
 
@@ -23,6 +24,7 @@ class CreateResult:
     state: str | None = None
     failure: str | None = None
     conflict_id: str | None = None
+    request_id: str | None = None
 
 
 class Transport(Protocol):
@@ -45,15 +47,18 @@ def finish_create(result: CreateResult) -> str:
     The caller invokes the transport once.
     """
     failure = result.failure
+    request_id = result.request_id
     if failure == "access":
         raise AccessError(
             "Authentication or permission failed.",
             operation="create",
+            request_id=request_id,
         )
     if failure == "capacity":
         raise CapacityError(
             "The API rejected the job for quota or capacity.",
             operation="create",
+            request_id=request_id,
         )
     if failure == "conflict":
         if result.conflict_id:
@@ -61,26 +66,31 @@ def finish_create(result: CreateResult) -> str:
                 "The API reports an existing resource for this create.",
                 operation="create",
                 run_id=result.conflict_id,
+                request_id=request_id,
             )
         raise SubmissionUncertain(
             "Create may have been accepted and the id is unknown.",
             operation="create",
+            request_id=request_id,
         )
     if failure == "transport":
         raise TransportError(
             "The call failed before create was accepted.",
             operation="create",
+            request_id=request_id,
         )
     lost = result.accepted and not result.resource_id
     if failure == "uncertain" or lost:
         raise SubmissionUncertain(
             "Create may have been accepted and the id is unknown.",
             operation="create",
+            request_id=request_id,
         )
     if not result.resource_id:
         raise TransportError(
             "The call failed before create was accepted.",
             operation="create",
+            request_id=request_id,
         )
     return result.resource_id
 
@@ -94,10 +104,11 @@ def call_transport(
         result = transport.create(body)
     except Error:
         raise
-    except Exception:
+    except Exception as exc:
         raise TransportError(
             "The call failed before create was accepted.",
             operation="create",
+            request_id=exposed_request_id(exc),
         ) from None
     finish_create(result)
     return result

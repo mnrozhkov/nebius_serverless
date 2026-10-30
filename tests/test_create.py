@@ -6,6 +6,7 @@ import pytest
 from fakes import FakeTransport
 
 import nebius_serverless as ns
+from nebius_serverless.sdk_transport import _result_when_id_known
 
 CUDA = "nvidia/cuda:13.1.1-runtime-ubuntu24.04"
 SECRET = "super-secret-value"
@@ -356,3 +357,60 @@ def test_sdk_request_omits_on_demand_flags() -> None:
         access=False,
     )
     assert lost.failure == "uncertain"
+
+
+class _Operation:
+    """Create operation that can gain an id before it is terminal."""
+
+    def __init__(self, resource_id: str = "", *, done: bool = False) -> None:
+        self.resource_id = resource_id
+        self._done = done
+        self.updates = 0
+        self.waited = False
+
+    def done(self) -> bool:
+        return self._done
+
+    def sync_update(self) -> None:
+        self.updates += 1
+        if self.updates == 1:
+            self.resource_id = "aijob-early"
+
+    def sync_wait(self) -> None:
+        self.waited = True
+        raise AssertionError("create waited for the container")
+
+
+def test_create_returns_when_the_id_is_already_known() -> None:
+    operation = _Operation("aijob-known")
+    result = _result_when_id_known(operation)
+    assert result.resource_id == "aijob-known"
+    assert result.accepted is True
+    assert result.failure is None
+    assert operation.updates == 0
+    assert operation.waited is False
+
+
+def test_create_polls_until_the_id_and_stops_before_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    slept: list[float] = []
+    monkeypatch.setattr(
+        "nebius_serverless.sdk_transport.time.sleep",
+        slept.append,
+    )
+    operation = _Operation("")
+    result = _result_when_id_known(operation)
+    assert result.resource_id == "aijob-early"
+    assert operation.updates == 1
+    assert operation.waited is False
+    assert slept == []
+
+
+def test_finished_operation_without_an_id_is_uncertain() -> None:
+    operation = _Operation("", done=True)
+    result = _result_when_id_known(operation)
+    assert result.resource_id is None
+    assert result.failure == "uncertain"
+    assert operation.updates == 0
+    assert operation.waited is False

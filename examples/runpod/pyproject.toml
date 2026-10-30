@@ -1,0 +1,8 @@
+[project]
+name = "nebius-serverless-runpod-examples"
+version = "0.0.1"
+description = "Isolated RunPod SDK comparison examples"
+requires-python = ">=3.10"
+dependencies = [
+    "runpod==2.0.0rc1",
+]
