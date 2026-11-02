@@ -26,7 +26,7 @@ The alias table is in [specs/cloud-jobs.md](specs/cloud-jobs.md). Logs are `nebi
 
 `create()`, `get()`, `wait()`, and `cancel()` print progress on stderr. `quiet=True` suppresses progress for that call only. `ns.configure_logging()` turns diagnostics on separately, and `ns.diagnostics()` returns local metadata, including whether stderr is `plain` or `interactive`. A local timeout does not cancel the remote job.
 
-`examples/job_quickstart.py` is the recipe below. `examples/from_yaml/nvidia_smi_yaml.py --config` loads a recipe from YAML. The other example settings live in the Python file.
+[`examples/job_quickstart.py`](examples/job_quickstart.py) is the recipe below. [`examples/from_yaml/nvidia_smi_yaml.py`](examples/from_yaml/nvidia_smi_yaml.py) `--config` loads [`examples/from_yaml/nvidia_smi.yaml`](examples/from_yaml/nvidia_smi.yaml). The other example settings live in the Python file.
 
 ```python
 import nebius_serverless as ns
@@ -42,7 +42,7 @@ run.wait()
 run.display()
 ```
 
-`examples/quiet_job.py` passes `quiet=True` on both `create` and `wait`. Stdout still prints the id and the final state:
+`quiet=True` on `create` and `wait` suppresses progress for those calls. Stdout still prints the id and the final state. The same pattern is in [Quiet progress](docs/examples.md#quiet-progress):
 
 ```python
 run = job.create(quiet=True)
@@ -62,4 +62,10 @@ run = job.create()
 
 `create(dry_run=True)` returns the create request and does not create a job. The example scripts call `create()` and use the active profile.
 
-Reference for the classes and methods: [docs/reference.md](docs/reference.md). Worked examples: [docs/examples.md](docs/examples.md).
+## Documentation
+
+- [docs/reference.md](docs/reference.md) — classes and methods on the current jobs surface
+- [docs/examples.md](docs/examples.md) — worked examples for the scripts under `examples/`
+- [docs/endpoints.md](docs/endpoints.md) — endpoint proposal (30 October 2026). The jobs surface in the reference is what the package implements
+- [docs/decorators.md](docs/decorators.md) — `@app.job` and `@app.endpoint` proposal (30 October 2026). The jobs surface in the reference is what the package implements
+- [examples/benchmark/sdk-comparison.md](examples/benchmark/sdk-comparison.md) — Python SDK comparison of this client, the official Nebius SDK, Modal, and RunPod

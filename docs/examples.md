@@ -1,69 +1,32 @@
 # Examples
 
-Scripts below use the active Nebius profile and call `create()`. `create(dry_run=True)` is a library call: it prints the request and does not create a job. Run a script only when the project, region, and quota are authorized.
+Scripts below use the active Nebius profile and call `create()`. `create(dry_run=True)` returns the create request and does not create a job. Run a script only when the project, region, and quota are authorized.
 
 The alias for `gpu` must exist in that region. See the [alias table](reference.md#gpu-and-cpu-aliases). Logs are `nebius ai job logs <id>`.
 
-Examples are grouped by use case. Settings other than a YAML path live in the Python file. The YAML runner takes `--config`.
+Examples are grouped by use case. Settings other than a YAML path live in the Python file. The YAML runner takes `--config`. Decorator recipes are the proposal in [decorators.md](decorators.md). The scripts on this page call `Job.create`.
 
 | Path | Use case |
 | --- | --- |
-| `examples/job_quickstart.py` | One `nvidia-smi` job, the README recipe |
-| `examples/from_yaml/` | That same recipe loaded from YAML |
-| `examples/train/` | Axolotl fine-tune |
-| `examples/finetuning/` | Axolotl QLoRA fine-tune (`config.yaml` + S3 bucket mount) |
-| `examples/parallel_jobs/` | Parallel Axolotl fine-tuning sweep across two models, saving outputs to S3 |
-| `examples/batch/matrix_multiply.py` | Three GPU matrix multiplications, one size per job |
-| `examples/benchmark/` | Side-by-side [SDK comparison](../examples/benchmark/sdk-comparison.md) (Official Nebius, Designed Nebius, Modal, RunPod) |
+| [`examples/job_quickstart.py`](../examples/job_quickstart.py) | One `nvidia-smi` job, the [README](../README.md) recipe |
+| [`examples/from_yaml/`](../examples/from_yaml/) | That same recipe loaded from YAML |
+| [`examples/train/`](../examples/train/) | Axolotl fine-tune |
+| [`examples/finetuning/`](../examples/finetuning/) | Axolotl QLoRA fine-tune (`config.yaml` + S3 bucket mount) |
+| [`examples/parallel_jobs/`](../examples/parallel_jobs/) | Parallel Axolotl fine-tuning sweep across two models, saving outputs to S3 |
+| [`examples/batch/matrix_multiply.py`](../examples/batch/matrix_multiply.py) | Three GPU matrix multiplications, one size per job |
+| [`examples/benchmark/`](../examples/benchmark/) | Side-by-side [SDK comparison](../examples/benchmark/sdk-comparison.md) (Official Nebius, Designed Nebius, Modal, RunPod) |
 
 ## Quickstart
 
-One on-demand H100 job, the same recipe as the README. In `eu-north1`, `gpu="h100"` selects `gpu-h100-sxm` and `1gpu-16vcpu-200gb`. Omit `gpu` for a CPU machine (`cpu-d3`, `2vcpu-8gb`). `pricing="spot"` on that machine raises `UnsupportedFeature`.
+One on-demand H100 job. The Python recipe and the commands that run it are in the [README](../README.md): [`examples/job_quickstart.py`](../examples/job_quickstart.py) and [`examples/from_yaml/nvidia_smi_yaml.py`](../examples/from_yaml/nvidia_smi_yaml.py) with [`examples/from_yaml/nvidia_smi.yaml`](../examples/from_yaml/nvidia_smi.yaml).
 
-`examples/job_quickstart.py`:
+In `eu-north1`, `gpu="h100"` selects `gpu-h100-sxm` and `1gpu-16vcpu-200gb`. Omit `gpu` for a CPU machine (`cpu-d3`, `2vcpu-8gb`). `pricing="spot"` on that machine raises `UnsupportedFeature`.
 
-```python
-import nebius_serverless as ns
-
-job = ns.Job(
-    ["nvidia-smi"],
-    image="nvidia/cuda:13.1.1-runtime-ubuntu24.04",
-    gpu="h100",
-    timeout="1h",
-)
-run = job.create()
-run.wait()
-run.display()
-```
-
-The same recipe as YAML, `examples/from_yaml/nvidia_smi.yaml`, run by `examples/from_yaml/nvidia_smi_yaml.py`:
-
-```yaml
-schema_version: 1
-kind: job
-image: nvidia/cuda:13.1.1-runtime-ubuntu24.04
-command: ["nvidia-smi"]
-gpu: h100
-timeout: 1h
-```
-
-```python
-job = ns.Job.from_yaml("examples/from_yaml/nvidia_smi.yaml")
-print(job.create(dry_run=True))
-```
-
-With a profile, both descriptions match apart from the generated name.
-
-```bash
-python examples/job_quickstart.py
-python examples/from_yaml/nvidia_smi_yaml.py --config examples/from_yaml/nvidia_smi.yaml
-```
-
-The YAML runner waits until `status.state` is `COMPLETED`.
+The YAML runner calls `create()`, `wait()`, and `display()`, then exits non-zero when `run.status` is not `COMPLETED`.
 
 ## Train
 
-One spot GPU job. The full cookbook command is `examples/train/axolotl_lora.py`. In `eu-north1`, `gpu="h100"` selects `gpu-h100-sxm` and `1gpu-16vcpu-200gb`. Shared memory stays the `16Gi` default.
+One spot GPU job. The full cookbook command is [`examples/train/axolotl_lora.py`](../examples/train/axolotl_lora.py). In `eu-north1`, `gpu="h100"` selects `gpu-h100-sxm` and `1gpu-16vcpu-200gb`. Shared memory stays the `16Gi` default.
 
 ```python
 job = ns.Job(
@@ -84,10 +47,10 @@ run.display()
 ```
 
 ```bash
-python examples/train/axolotl_lora.py
+uv run python examples/train/axolotl_lora.py
 ```
 
-`examples/finetuning/axolotl-finetuning.py` pairs that recipe with `examples/finetuning/config.yaml` (`Qwen/Qwen2.5-0.5B` QLoRA on `Salesforce/wikitext`) and mounts `s3://fine-tuning-axolotl:/workspace/data:rw`. Training writes to local `/workspace/output` first and copies checkpoints to `/workspace/data/output/$RUN_ID` on completion:
+[`examples/finetuning/axolotl-finetuning.py`](../examples/finetuning/axolotl-finetuning.py) pairs that recipe with [`examples/finetuning/config.yaml`](../examples/finetuning/config.yaml) (`Qwen/Qwen2.5-0.5B` QLoRA on `Salesforce/wikitext`) and mounts `s3://fine-tuning-axolotl:/workspace/data:rw`. Training writes to local `/workspace/output` first and copies checkpoints to `/workspace/data/output/$RUN_ID` on completion:
 
 ```python
 job = ns.Job(
@@ -119,7 +82,7 @@ uv run python examples/finetuning/axolotl-finetuning.py
 
 ## Parallel Fine-Tuning Sweep
 
-`examples/parallel_jobs/axolotl_sweep.py` runs two Axolotl jobs in parallel (`Qwen/Qwen2.5-0.5B` and `Qwen/Qwen2.5-1.5B`). Upload both configs to Object Storage first. Both jobs mount `s3://fine-tuning-axolotl:/workspace/data:rw`, train from `/workspace/data/configs/…`, and copy checkpoints into separate folders under `/workspace/data/output/`.
+[`examples/parallel_jobs/axolotl_sweep.py`](../examples/parallel_jobs/axolotl_sweep.py) runs two Axolotl jobs in parallel (`Qwen/Qwen2.5-0.5B` and `Qwen/Qwen2.5-1.5B`). Upload both configs to Object Storage first. Both jobs mount `s3://fine-tuning-axolotl:/workspace/data:rw`, train from `/workspace/data/configs/…`, and copy checkpoints into separate folders under `/workspace/data/output/`.
 
 ```python
 jobs = (
@@ -172,9 +135,9 @@ uv run python examples/parallel_jobs/axolotl_sweep.py
 
 ## Batch
 
-Three independent GPU jobs, one matrix size each: `1024`, `2048`, and `4096`. There is no `.map()`. `examples/batch/matrix_multiply.py` submits every job, prints each id, then waits and reads a JSON report per size. Matrices are created on the GPU. Object Storage is used only to bring back the small reports. The jobs may run at the same time. The script does not promise that they start together, or that the batch finishes sooner than the same jobs one after another.
+Three independent GPU jobs, one matrix size each: `1024`, `2048`, and `4096`. There is no `.map()`. [`examples/batch/matrix_multiply.py`](../examples/batch/matrix_multiply.py) submits every job, prints each id, then waits and reads a JSON report per size. Matrices are created on the GPU. Object Storage is used only to bring back the small reports. The jobs may run at the same time. The script does not promise that they start together, or that the batch finishes sooner than the same jobs one after another.
 
-Set `BUCKET` to an existing bucket and keep `ENDPOINT` on that bucket’s region. The file ships `ENDPOINT` as `https://storage.eu-north1.nebius.cloud`. The active Nebius profile must be allowed to create jobs in a region where `gpu="h100"` exists. In `eu-north1` that alias is `gpu-h100-sxm` / `1gpu-16vcpu-200gb`. Quota has to cover up to three one-GPU H100 jobs, because overlap is allowed. The AWS CLI (v2) needs credentials that can read the report objects at `ENDPOINT`, and delete them when you clean up. The job mount `s3://<bucket>:/data:rw` has to be able to write those objects. No input files are uploaded. The controller does not import PyTorch.
+The script sets `BUCKET` to `acceptance-bucket` and `ENDPOINT` to `https://storage.eu-north1.nebius.cloud`. Change both when that bucket is not the one you can mount and read. The active Nebius profile must be allowed to create jobs in a region where `gpu="h100"` exists. In `eu-north1` that alias is `gpu-h100-sxm` / `1gpu-16vcpu-200gb`. Quota has to cover up to three one-GPU H100 jobs, because overlap is allowed. The AWS CLI (v2) needs credentials that can read the report objects at `ENDPOINT`, and delete them when you clean up. The job mount `s3://<bucket>:/data:rw` has to be able to write those objects. No input files are uploaded. The controller does not import PyTorch.
 
 The image is pinned by digest, checked against the `linux/amd64` manifest of `pytorch/pytorch:2.6.0-cuda12.6-cudnn9-runtime` (`pytorch/pytorch:2.6.0-cuda12.6-cudnn9-runtime@sha256:f894dae26e1ee8557c544f9cfdb9dc011b1552bf3c1e656b422f2e221d380e40`):
 
