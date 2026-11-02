@@ -6,26 +6,24 @@ Nebius profile.
 
 import nebius_serverless as ns
 
-COMMAND = ["nvidia-smi"]
-IMAGE = "nvidia/cuda:13.1.1-runtime-ubuntu24.04"
-GPU = "h100"
-TIMEOUT = "1h"
-
 
 def main() -> None:
-    """Create the README job and follow it.
+    """Create the README job, wait for it, and print the final record."""
 
-    Progress is on stderr. The script does not print the job JSON.
-    """
-    job = ns.Job(COMMAND, image=IMAGE, gpu=GPU, timeout=TIMEOUT)
+    # Describe what should run.
+    job = ns.Job(
+        ["nvidia-smi"],
+        image="nvidia/cuda:13.1.1-runtime-ubuntu24.04",
+        gpu="h100",
+        timeout="1h",
+    )
+
+    # Start one execution.
     run = job.create()
-    saved_id = run.id
-    run.get()
+
+    # Wait for it to complete.
     run.wait()
-    if run.status != "COMPLETED":
-        raise SystemExit(f"{run.id} ended {run.status}")
-    run.cancel()
-    ns.jobs.get(saved_id)
+    run.display()
 
 
 if __name__ == "__main__":

@@ -1,19 +1,18 @@
 """Reproducible line-count and SHA-256 hash measurements for SDK comparisons.
 
-Counts nonblank, non-comment physical Python lines across all 10 comparison
-variants (Quickstart and Batch across Official Nebius SDK, Designed Nebius SDK,
-Modal, RunPod App SDK beta, and RunPod Endpoint SDK client + worker).
+Counts nonblank, non-comment physical Python lines across all 8 comparison
+variants (Quickstart and Axolotl Fine-tuning across Official Nebius SDK,
+Designed Nebius SDK, Modal, and RunPod).
 
 Counting rule (per ``specs/sdk_copmarison.md``):
 1. Blank lines (``line.strip() == ""``) and comment lines
    (``line.strip().startswith("#")``, including orchestration marker lines)
    are excluded.
-2. Module, class, and function docstrings in the file AST are excluded. When a
-   module defines an embedded ``WORKER`` string literal containing Python code,
-   docstrings inside ``WORKER`` are also excluded while ``WORKER = \"\"\"`` and
-   closing ``\"\"\"`` delimiter lines are counted.
+2. Module, class, and function docstrings in the file AST are excluded.
 3. Non-excluded physical lines inside ``# --- orchestration: start ---`` ..
-   ``# --- orchestration: end ---`` blocks are counted as *Orchestration*.
+   ``# --- orchestration: end ---`` blocks are counted as *Orchestration*
+   (or, in marker-free scripts, all non-excluded lines outside the
+   ``def main() -> None:`` / ``if __name__ == "__main__": main()`` wrapper).
 4. All remaining non-excluded physical lines are counted as *Workload and data*
    (``workload_and_data = python_total - orchestration``).
 """
@@ -30,6 +29,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 ORCHESTRATION_START = "# --- orchestration: start ---"
 ORCHESTRATION_END = "# --- orchestration: end ---"
+_ENTRYPOINT_WRAPPER_LINES = frozenset(
+    {
+        "def main() -> None:",
+        'if __name__ == "__main__":',
+        "main()",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -44,26 +50,15 @@ class FileCount:
 
 
 @dataclass(frozen=True)
-class NonPythonFileCount:
-    """Line count and SHA-256 digest for a non-Python setup file."""
-
-    relpath: str
-    sha256: str
-    nonblank_lines: int
-
-
-@dataclass(frozen=True)
 class VariantMeasurement:
     """Aggregated measurements for one task and provider variant."""
 
     task: str
     variant: str
     files: tuple[FileCount, ...]
-    non_python_files: tuple[NonPythonFileCount, ...]
     python_total: int
     orchestration: int
     workload_and_data: int
-    non_python_lines: int
     other_setup: str
     concepts_exposed: tuple[str, ...]
     interfaces_crossed: tuple[str, ...]
@@ -121,39 +116,16 @@ def _docstring_lines_in_tree(
 
 
 def docstring_line_numbers(source: str) -> set[int]:
-    """Return 1-based physical line numbers of docstrings in ``source``.
-
-    Includes docstrings inside a top-level ``WORKER`` string assignment when
-    present so embedded and non-embedded worker functions are counted under the
-    same rule.
-    """
+    """Return 1-based physical line numbers of docstrings in ``source``."""
     tree = ast.parse(source)
-    excluded = _docstring_lines_in_tree(tree)
-    for node in tree.body:
-        if not isinstance(node, ast.Assign):
-            continue
-        if not any(
-            isinstance(target, ast.Name) and target.id == "WORKER"
-            for target in node.targets
-        ):
-            continue
-        if (
-            isinstance(node.value, ast.Constant)
-            and isinstance(node.value.value, str)
-            and node.value.lineno is not None
-        ):
-            worker_source = node.value.value
-            worker_tree = ast.parse(worker_source)
-            excluded |= _docstring_lines_in_tree(
-                worker_tree, line_offset=node.value.lineno - 1
-            )
-    return excluded
+    return _docstring_lines_in_tree(tree)
 
 
 def count_python_file(path: Path) -> FileCount:
     """Count total, orchestration, and workload lines in ``path``."""
     source = path.read_text(encoding="utf-8")
     doc_lines = docstring_line_numbers(source)
+    has_markers = ORCHESTRATION_START in source
     in_orchestration = False
     python_total = 0
     orchestration = 0
@@ -179,7 +151,9 @@ def count_python_file(path: Path) -> FileCount:
         if lineno in doc_lines:
             continue
         python_total += 1
-        if in_orchestration:
+        if in_orchestration or (
+            not has_markers and stripped not in _ENTRYPOINT_WRAPPER_LINES
+        ):
             orchestration += 1
 
     if in_orchestration:
@@ -195,23 +169,6 @@ def count_python_file(path: Path) -> FileCount:
     )
 
 
-def count_non_python_file(path: Path) -> NonPythonFileCount:
-    """Count nonblank, non-comment physical lines in a setup file."""
-    source = path.read_text(encoding="utf-8")
-    nonblank = 0
-    for raw_line in source.splitlines():
-        stripped = raw_line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        nonblank += 1
-    relpath = path.resolve().relative_to(ROOT).as_posix()
-    return NonPythonFileCount(
-        relpath=relpath,
-        sha256=sha256_file(path),
-        nonblank_lines=nonblank,
-    )
-
-
 def pct_reduction(before: int, after: int) -> float:
     """Return ``(before - after) / before * 100`` rounded to 1 decimal."""
     if before <= 0:
@@ -224,45 +181,40 @@ def _measure_variant(
     task: str,
     variant: str,
     py_relpaths: tuple[str, ...],
-    non_py_relpaths: tuple[str, ...] = (),
     other_setup: str,
     concepts_exposed: tuple[str, ...],
     interfaces_crossed: tuple[str, ...],
+    verified_outcome: str = "Pending live run",
 ) -> VariantMeasurement:
     files = tuple(
         count_python_file(ROOT / relpath) for relpath in py_relpaths
     )
-    non_py_files = tuple(
-        count_non_python_file(ROOT / relpath) for relpath in non_py_relpaths
-    )
     python_total = sum(item.python_total for item in files)
     orchestration = sum(item.orchestration for item in files)
     workload_and_data = sum(item.workload_and_data for item in files)
-    non_python_lines = sum(item.nonblank_lines for item in non_py_files)
     return VariantMeasurement(
         task=task,
         variant=variant,
         files=files,
-        non_python_files=non_py_files,
         python_total=python_total,
         orchestration=orchestration,
         workload_and_data=workload_and_data,
-        non_python_lines=non_python_lines,
         other_setup=other_setup,
         concepts_exposed=concepts_exposed,
         interfaces_crossed=interfaces_crossed,
+        verified_outcome=verified_outcome,
     )
 
 
 def measure_all() -> tuple[
     tuple[VariantMeasurement, ...], tuple[ReductionSummary, ...]
 ]:
-    """Compute measurements for all 10 variants and Nebius reductions."""
+    """Compute measurements for all 8 variants and Nebius reductions."""
     variants = (
         _measure_variant(
             task="Quickstart",
             variant="Official Nebius SDK",
-            py_relpaths=("examples/official/quickstart.py",),
+            py_relpaths=("examples/benchmark/nebius/quickstart.py",),
             other_setup=(
                 "4 steps: uv sync; Nebius CLI profile + parent_id; "
                 "eu-north1 H100 quota & default subnet; "
@@ -284,11 +236,16 @@ def measure_all() -> tuple[
                 "sdk.sync_close",
             ),
             interfaces_crossed=("Python", "Nebius CLI profile & logs"),
+            verified_outcome=(
+                "Verified live on eu-north1 H100 "
+                "(aijob-e00v6x2f50trfqv8dn -> COMPLETED; "
+                "NVIDIA H100 80GB HBM3)"
+            ),
         ),
         _measure_variant(
             task="Quickstart",
             variant="Designed Nebius SDK",
-            py_relpaths=("examples/comparison/quickstart.py",),
+            py_relpaths=("examples/job_quickstart.py",),
             other_setup=(
                 "4 steps: uv sync; Nebius CLI profile + parent_id; "
                 "eu-north1 H100 quota & default subnet; "
@@ -297,18 +254,22 @@ def measure_all() -> tuple[
             concepts_exposed=(
                 "ns.Job",
                 "job.create",
-                "run.id",
                 "run.wait",
-                "run.status",
+                "run.display",
             ),
             interfaces_crossed=("Python", "Nebius CLI profile & logs"),
+            verified_outcome=(
+                "Verified live on eu-north1 H100 "
+                "(aijob-e00rzxph84v14b5ddz -> COMPLETED; "
+                "NVIDIA H100 80GB HBM3)"
+            ),
         ),
         _measure_variant(
             task="Quickstart",
             variant="Modal",
-            py_relpaths=("examples/modal/quickstart.py",),
+            py_relpaths=("examples/benchmark/modal/quickstart.py",),
             other_setup=(
-                "3 steps: uv sync --project examples/modal; "
+                "3 steps: uv sync --project examples/benchmark/modal; "
                 "modal setup; modal run"
             ),
             concepts_exposed=(
@@ -318,13 +279,16 @@ def measure_all() -> tuple[
                 ".remote()",
             ),
             interfaces_crossed=("Python", "Modal CLI"),
+            verified_outcome=(
+                "Pending live run (Modal token missing: run modal token new)"
+            ),
         ),
         _measure_variant(
             task="Quickstart",
-            variant="RunPod App SDK (beta)",
-            py_relpaths=("examples/runpod/app/quickstart.py",),
+            variant="RunPod",
+            py_relpaths=("examples/benchmark/runpod/quickstart.py",),
             other_setup=(
-                "3 steps: uv sync --project examples/runpod; "
+                "3 steps: uv sync --project examples/benchmark/runpod; "
                 "rp login; rp flash dev --once"
             ),
             concepts_exposed=(
@@ -334,48 +298,19 @@ def measure_all() -> tuple[
                 ".remote()",
             ),
             interfaces_crossed=("Python", "RunPod Flash CLI"),
-        ),
-        _measure_variant(
-            task="Quickstart",
-            variant="RunPod Endpoint SDK",
-            py_relpaths=(
-                "examples/runpod/endpoint/quickstart_client.py",
-                "examples/runpod/endpoint/quickstart_worker.py",
-            ),
-            non_py_relpaths=(
-                "examples/runpod/endpoint/Dockerfile",
-                "examples/runpod/endpoint/requirements.txt",
-            ),
-            other_setup=(
-                "9 non-Python lines (Dockerfile + requirements.txt) + "
-                "5 steps: uv sync; docker build & push; create H100 endpoint; "
-                "export RUNPOD_API_KEY & RUNPOD_ENDPOINT_ID; run client"
-            ),
-            concepts_exposed=(
-                "handler(job)",
-                "runpod.serverless.start",
-                "runpod.api_key",
-                "runpod.Endpoint",
-                "endpoint.run",
-                "job.job_id",
-                "job.output",
-                "job.status",
-            ),
-            interfaces_crossed=(
-                "Python",
-                "Docker CLI",
-                "Container registry",
-                "RunPod console/API",
+            verified_outcome=(
+                "Pending live run (RunPod API key missing: run rp login)"
             ),
         ),
         _measure_variant(
-            task="Batch (3 sizes)",
+            task="Fine-tuning (Axolotl)",
             variant="Official Nebius SDK",
-            py_relpaths=("examples/official/matrix_multiply.py",),
+            py_relpaths=("examples/benchmark/nebius/axolotl_lora.py",),
             other_setup=(
-                "6 steps: uv sync; Nebius CLI profile + parent_id; "
-                "eu-north1 H100 quota & subnet; Object Storage bucket; "
-                "AWS CLI v2 credentials; manual job & S3 cleanup"
+                "5 steps: uv sync; Nebius CLI profile + parent_id; "
+                "eu-north1 spot H100 quota & subnet; "
+                "S3 buckets axolotl-data & axolotl-artifacts; "
+                "upload config.yaml & dataset"
             ),
             concepts_exposed=(
                 "Config",
@@ -387,7 +322,10 @@ def measure_all() -> tuple[
                 "JobSpec",
                 "JobSpec.DiskSpec",
                 "ComputeDisk.DiskType",
+                "PricingModelSpec",
+                "FollowsSpotPriceSpec",
                 "JobSpec.VolumeMount",
+                "JobSpec.VolumeMount.Mode",
                 "operation.wait",
                 "operation.sync_wait",
                 "GetJobRequest",
@@ -396,118 +334,101 @@ def measure_all() -> tuple[
             ),
             interfaces_crossed=(
                 "Python",
-                "Nebius CLI profile & cleanup",
-                "Object Storage mount",
-                "AWS CLI v2",
+                "Nebius CLI profile & logs",
+                "Object Storage mounts",
+            ),
+            verified_outcome=(
+                "Verified dry-run & offline request mapping "
+                "(live spot H100 run pending bucket upload)"
             ),
         ),
         _measure_variant(
-            task="Batch (3 sizes)",
+            task="Fine-tuning (Axolotl)",
             variant="Designed Nebius SDK",
-            py_relpaths=("examples/batch/matrix_multiply.py",),
+            py_relpaths=("examples/train/axolotl_lora.py",),
             other_setup=(
-                "6 steps: uv sync; Nebius CLI profile + parent_id; "
-                "eu-north1 H100 quota & subnet; Object Storage bucket; "
-                "AWS CLI v2 credentials; manual job & S3 cleanup"
+                "5 steps: uv sync; Nebius CLI profile + parent_id; "
+                "eu-north1 spot H100 quota & subnet; "
+                "S3 buckets axolotl-data & axolotl-artifacts; "
+                "upload config.yaml & dataset"
             ),
             concepts_exposed=(
                 "ns.Job",
-                "volumes mount string",
+                "pricing='spot'",
+                "disk='500Gi'",
+                "volumes mount strings",
                 "job.create",
-                "run.id",
                 "run.wait",
-                "run.status",
+                "run.display",
             ),
             interfaces_crossed=(
                 "Python",
-                "Nebius CLI profile & cleanup",
-                "Object Storage mount",
-                "AWS CLI v2",
+                "Nebius CLI profile & logs",
+                "Object Storage mounts",
+            ),
+            verified_outcome=(
+                "Verified dry-run & offline request mapping "
+                "(live spot H100 run pending bucket upload)"
             ),
         ),
         _measure_variant(
-            task="Batch (3 sizes)",
+            task="Fine-tuning (Axolotl)",
             variant="Modal",
-            py_relpaths=("examples/modal/matrix_multiply.py",),
+            py_relpaths=("examples/benchmark/modal/axolotl_lora.py",),
             other_setup=(
-                "3 steps + remote image build: uv sync --project "
-                "examples/modal; modal setup; modal run "
-                "(builds debian_slim + torch==2.6.0)"
+                "4 steps: uv sync --project examples/benchmark/modal; "
+                "modal setup; modal volume put axolotl-data config.yaml; "
+                "modal run"
             ),
             concepts_exposed=(
-                "modal.Image.debian_slim.pip_install",
                 "modal.App",
+                "modal.Image.from_registry",
+                "modal.Volume.from_name",
                 "@app.function",
+                "artifacts.commit()",
                 "@app.local_entrypoint",
-                ".map()",
+                ".remote()",
             ),
             interfaces_crossed=(
                 "Python",
                 "Modal CLI",
-                "Modal remote image builder",
+                "Modal Volumes",
+            ),
+            verified_outcome=(
+                "Pending live run (Modal token missing: run modal token new)"
             ),
         ),
         _measure_variant(
-            task="Batch (3 sizes)",
-            variant="RunPod App SDK (beta)",
-            py_relpaths=("examples/runpod/app/matrix_multiply.py",),
+            task="Fine-tuning (Axolotl)",
+            variant="RunPod",
+            py_relpaths=("examples/benchmark/runpod/axolotl_lora.py",),
             other_setup=(
-                "3 steps + remote dependency install: uv sync --project "
-                "examples/runpod; rp login; rp flash dev --once "
-                "(installs dependencies=['torch==2.6.0'])"
+                "4 steps: uv sync --project examples/benchmark/runpod; "
+                "rp login; upload config.yaml to axolotl-workspace volume; "
+                "rp flash dev --once"
             ),
             concepts_exposed=(
                 "runpod.App",
-                "@app.queue(dependencies=...)",
+                "runpod.NetworkVolume",
+                "@app.task",
+                "timeout CLI wrapper",
                 "@runpod.local_entrypoint",
-                ".spawn()",
-                "job.id",
-                "job.result()",
+                ".remote()",
             ),
             interfaces_crossed=(
                 "Python",
                 "RunPod Flash CLI",
-                "RunPod worker dependency installer",
+                "RunPod NetworkVolume",
             ),
-        ),
-        _measure_variant(
-            task="Batch (3 sizes)",
-            variant="RunPod Endpoint SDK",
-            py_relpaths=(
-                "examples/runpod/endpoint/matrix_client.py",
-                "examples/runpod/endpoint/matrix_worker.py",
-            ),
-            non_py_relpaths=(
-                "examples/runpod/endpoint/Dockerfile",
-                "examples/runpod/endpoint/requirements.txt",
-            ),
-            other_setup=(
-                "9 non-Python lines (Dockerfile + requirements.txt) + "
-                "5 steps: uv sync; docker build & push; create H100 endpoint; "
-                "export RUNPOD_API_KEY & RUNPOD_ENDPOINT_ID; run client"
-            ),
-            concepts_exposed=(
-                "handler(job)",
-                "runpod.serverless.start",
-                "runpod.api_key",
-                "runpod.Endpoint",
-                "endpoint.run",
-                "job.job_id",
-                "job.output",
-                "job.status",
-            ),
-            interfaces_crossed=(
-                "Python",
-                "Docker CLI",
-                "Container registry",
-                "RunPod console/API",
+            verified_outcome=(
+                "Pending live run (RunPod API key missing: run rp login)"
             ),
         ),
     )
 
     by_key = {(item.task, item.variant): item for item in variants}
     reductions: list[ReductionSummary] = []
-    for task in ("Quickstart", "Batch (3 sizes)"):
+    for task in ("Quickstart", "Fine-tuning (Axolotl)"):
         before = by_key[(task, "Official Nebius SDK")]
         after = by_key[(task, "Designed Nebius SDK")]
         reductions.append(
@@ -594,15 +515,6 @@ def format_markdown_report() -> str:
                 f"| `{fc.relpath}` | {fc.python_total} | "
                 f"{fc.orchestration} | {fc.workload_and_data} | "
                 f"`{fc.sha256}` |"
-            )
-    for item in variants:
-        for npc in item.non_python_files:
-            if npc.relpath in seen_files:
-                continue
-            seen_files.add(npc.relpath)
-            lines.append(
-                f"| `{npc.relpath}` (non-Python) | "
-                f"{npc.nonblank_lines} | — | — | `{npc.sha256}` |"
             )
 
     return "\n".join(lines) + "\n"

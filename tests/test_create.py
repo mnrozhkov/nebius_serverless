@@ -6,7 +6,10 @@ import pytest
 from fakes import FakeTransport
 
 import nebius_serverless as ns
-from nebius_serverless.sdk_transport import _result_when_id_known
+from nebius_serverless.sdk_transport import (
+    _result_when_id_known,
+    build_create_request,
+)
 
 CUDA = "nvidia/cuda:13.1.1-runtime-ubuntu24.04"
 SECRET = "super-secret-value"
@@ -96,6 +99,49 @@ def test_spot_flags_and_dry_run_skips_create() -> None:
     assert spec["volumes"] == [
         {"source": "data", "container_path": "/work", "mode": "ro"}
     ]
+
+
+def test_inject_files_read_on_create(tmp_path: Path) -> None:
+    local = tmp_path / "config.yaml"
+    local.write_text("base_model: demo\n", encoding="utf-8")
+    inject = f"{local}:/workspace/config.yaml"
+    fake = FakeTransport()
+    described = _job(inject_files=[inject]).create(
+        dry_run=True,
+        region="eu-north1",
+        project="project-1",
+        transport=fake,
+    )
+    assert isinstance(described, dict)
+    assert described["inject_files"] == [inject]
+    assert fake.bodies == []
+
+    _job(inject_files=[inject], env={}).create(
+        region="eu-north1",
+        project="project-1",
+        transport=fake,
+    )
+    spec = _spec(fake.bodies[0])
+    assert spec["injected_files"] == [
+        {
+            "container_path": "/workspace/config.yaml",
+            "content": b"base_model: demo\n",
+        }
+    ]
+
+    request = build_create_request(fake.bodies[0])
+    payload = request.to_json(preserving_proto_field_name=True)
+    assert "injected_files" in payload or "injectedFiles" in payload
+    assert "/workspace/config.yaml" in payload
+
+    too_big = tmp_path / "big.bin"
+    too_big.write_bytes(b"x" * (64 * 1024 + 1))
+    with pytest.raises(ns.ValidationError, match="64 KiB"):
+        _job(inject_files=[f"{too_big}:/workspace/big.bin"], env={}).create(
+            region="eu-north1",
+            project="project-1",
+            transport=fake,
+        )
 
 
 def test_lost_id_and_transport_failure_do_not_retry() -> None:
@@ -300,6 +346,7 @@ def test_sdk_request_omits_on_demand_flags() -> None:
         pricing="on-demand",
         subnet_id=None,
         volumes=(),
+        inject_files=(),
         env=(("TOKEN", SECRET),),
         name="my-job",
         disk=None,
@@ -321,6 +368,7 @@ def test_sdk_request_omits_on_demand_flags() -> None:
         pricing="spot",
         subnet_id=None,
         volumes=(),
+        inject_files=(),
         env=(),
         name="my-job",
         disk="500Gi",

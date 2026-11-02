@@ -1,5 +1,6 @@
 """One cloud job, and the collection addressed by id."""
 
+import sys
 import time
 
 from .errors import Error, ValidationError, WaitTimeout
@@ -12,6 +13,7 @@ from .output import (
     elapsed_ms,
     log_transport,
     report,
+    show_record,
     timeout_text,
 )
 from .status import Status
@@ -22,7 +24,7 @@ _LOG = "nebius_serverless.run"
 TERMINAL_STATES = frozenset(
     {"COMPLETED", "FAILED", "CANCELLED", "ERROR"}
 )
-POLL_SECONDS = 1.0
+POLL_SECONDS = 10.0
 
 
 def monotonic() -> float:
@@ -191,6 +193,20 @@ class Run:
             quiet=quiet,
             logger_name=_LOG,
             work=work,
+        )
+
+    def display(self) -> None:
+        """Print the last fetched record.
+
+        Does not fetch. Before the first successful ``get`` or ``wait``,
+        prints the id and name. Color follows the terminal and
+        ``NO_COLOR``.
+        """
+        show_record(
+            self._record,
+            job_id=self._id,
+            name=self._name,
+            stream=sys.stdout,
         )
 
     def _get(self) -> dict[str, object]:

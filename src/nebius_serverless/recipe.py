@@ -4,6 +4,7 @@ import re
 import shlex
 from collections.abc import Mapping, Sequence
 from datetime import timedelta
+from pathlib import Path
 
 from .aliases import known_cpu, validate_gpu_name, validate_platform
 from .errors import UnsupportedFeature, ValidationError
@@ -13,6 +14,7 @@ MAX_TIMEOUT = 168 * 3600
 DISK_DEFAULT = "250Gi"
 SHM_LABEL = "16Gi"
 SHM_BYTES = 16 * 1024**3
+INJECT_FILE_MAX_BYTES = 64 * 1024
 
 _IMAGE = re.compile(
     r"^[a-z0-9][a-z0-9._/-]*"
@@ -26,6 +28,7 @@ _S3_VOLUME = re.compile(
     r"^s3://([^/:]+):(/[^:\s]+)(?::(ro|rw)(?::([^:\s]+))?)?$"
 )
 _MOUNT = re.compile(r"^([^:\s]+):(/[^:\s]+)(?::(ro|rw))?$")
+_INJECT_FILE = re.compile(r"^(.+):(/[^:\s]+)$")
 _UNITS = {
     "Ki": 1024,
     "Mi": 1024**2,
@@ -271,6 +274,70 @@ def check_identity(
     validate_platform(platform, preset)
 
 
+def validate_inject_files(inject_files: object) -> tuple[str, ...]:
+    """Pass inject-file strings through. Files are read on create."""
+    if inject_files is None:
+        return ()
+    if isinstance(inject_files, str) or not isinstance(
+        inject_files, Sequence
+    ):
+        raise ValidationError(
+            "inject_files must be a list of "
+            "local_path:container_path strings.",
+            operation="Job",
+        )
+    items: list[str] = []
+    for item in inject_files:
+        if not isinstance(item, str) or _INJECT_FILE.fullmatch(item) is None:
+            raise ValidationError(
+                "inject_files must be local_path:container_path, "
+                "matching the CLI --inject-file form.",
+                operation="Job",
+            )
+        items.append(item)
+    return tuple(items)
+
+
+def parse_inject_file(item: str) -> tuple[Path, str]:
+    """Split one inject-file string into a local path and container path."""
+    match = _INJECT_FILE.fullmatch(item)
+    if match is None:
+        raise ValidationError(
+            "inject_files must be local_path:container_path, "
+            "matching the CLI --inject-file form.",
+            operation="Job",
+        )
+    return Path(match.group(1)), match.group(2)
+
+
+def load_inject_files(
+    inject_files: Sequence[str],
+) -> list[dict[str, object]]:
+    """Read local files for create. Each file must be at most 64 KiB."""
+    loaded: list[dict[str, object]] = []
+    for item in inject_files:
+        local_path, container_path = parse_inject_file(item)
+        try:
+            content = local_path.read_bytes()
+        except OSError as exc:
+            raise ValidationError(
+                f"Could not read inject file {local_path}.",
+                operation="create",
+            ) from exc
+        if len(content) > INJECT_FILE_MAX_BYTES:
+            raise ValidationError(
+                "inject_files entries must be at most 64 KiB.",
+                operation="create",
+            )
+        loaded.append(
+            {
+                "container_path": container_path,
+                "content": content,
+            }
+        )
+    return loaded
+
+
 def describe(
     *,
     command: Sequence[str],
@@ -283,6 +350,7 @@ def describe(
     pricing: str,
     subnet_id: str | None,
     volumes: Sequence[str],
+    inject_files: Sequence[str],
     env_keys: Sequence[str],
     name: str,
     disk: str | None,
@@ -305,6 +373,8 @@ def describe(
         description["subnet_id"] = subnet_id
     if volumes:
         description["volumes"] = list(volumes)
+    if inject_files:
+        description["inject_files"] = list(inject_files)
     description["env"] = list(env_keys)
     description["name"] = name
     description["disk"] = disk if disk is not None else DISK_DEFAULT
@@ -323,6 +393,7 @@ def request_body(
     pricing: str,
     subnet_id: str | None,
     volumes: Sequence[str],
+    inject_files: Sequence[dict[str, object]],
     env: Sequence[tuple[str, str]],
     name: str,
     disk: str | None,
@@ -344,6 +415,8 @@ def request_body(
         spec["subnet_id"] = subnet_id
     if volumes:
         spec["volumes"] = [parse_volume(item) for item in volumes]
+    if inject_files:
+        spec["injected_files"] = list(inject_files)
     if env:
         spec["environment_variables"] = [
             {"name": key, "value": value} for key, value in env

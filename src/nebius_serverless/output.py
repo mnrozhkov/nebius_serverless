@@ -11,6 +11,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import TypeVar
 
 from .errors import Error
@@ -164,23 +165,16 @@ class Progress:
 
     def _render_transition(self, fact: Status) -> None:
         elapsed = fact.observed_seconds or 0.0
-        line = _progress_parts(
+        self._stop_spinner()
+        self._write(self._visible(_seen_parts(fact, self._stream)))
+        if self.is_plain() or elapsed < SPINNER_AFTER:
+            return
+        self._show_spinner(self._visible(_progress_parts(
             fact.job_id,
             fact.state,
             elapsed,
             self._stream,
-        )
-        if fact.previous is None:
-            if self.is_plain():
-                self._write(self._visible(line))
-                return
-            if elapsed >= SPINNER_AFTER:
-                self._show_spinner(self._visible(line))
-            return
-        self._write(self._visible(_change_parts(fact)))
-        if self.is_plain() or elapsed < SPINNER_AFTER:
-            return
-        self._show_spinner(self._visible(line))
+        )))
 
     def _write(self, text: object) -> None:
         if isinstance(text, str):
@@ -499,6 +493,334 @@ def format_seconds(value: float) -> str:
     return f"{rounded:.1f}s"
 
 
+def show_record(
+    record: dict[str, object] | None,
+    *,
+    job_id: str,
+    name: str,
+    stream: object,
+) -> None:
+    """Print one job record. ``stream`` is stdout for ``Run.display``."""
+    color = (
+        presentation_mode(stream) == "interactive" and not _no_color()
+    )
+    from rich.console import Console
+
+    console = Console(
+        file=stream,
+        force_terminal=color,
+        force_jupyter=False,
+        force_interactive=color,
+        no_color=True if not color else None,
+        color_system=None if not color else "standard",
+        markup=False,
+        highlight=False,
+        emoji=False,
+        soft_wrap=True,
+        width=4096,
+        height=24,
+    )
+    for parts in _record_lines(record, job_id=job_id, name=name):
+        if not parts:
+            console.print("")
+            continue
+        console.print(
+            _paint(parts, color=color),
+            markup=False,
+            highlight=False,
+            soft_wrap=True,
+            overflow="ignore",
+            crop=False,
+        )
+
+
+def _record_lines(
+    record: dict[str, object] | None,
+    *,
+    job_id: str,
+    name: str,
+) -> list[list[tuple[str, str]]]:
+    shown_id, shown_name = _identity(record, job_id, name)
+    lines: list[list[tuple[str, str]]] = [
+        _header(shown_id, shown_name)
+    ]
+    if record is None:
+        lines.append([("  no record yet", "dim")])
+        return lines
+    state = _record_state(record)
+    if state is not None:
+        lines.append([("  ", ""), (state, _state_style(state))])
+    for block in (
+        _spec_lines(record),
+        _time_lines(record),
+        _instance_lines(record),
+    ):
+        if not block:
+            continue
+        lines.append([])
+        lines.extend(block)
+    return lines
+
+
+def _header(job_id: str, name: str) -> list[tuple[str, str]]:
+    parts = [(plain_text(job_id), "bold cyan")]
+    if name and name != job_id:
+        parts.append(("  ", ""))
+        parts.append((plain_text(name), ""))
+    return parts
+
+
+def _identity(
+    record: dict[str, object] | None,
+    job_id: str,
+    name: str,
+) -> tuple[str, str]:
+    metadata = _mapping(None if record is None else record.get("metadata"))
+    shown_id = _text(None if metadata is None else metadata.get("id"))
+    shown_name = _text(None if metadata is None else metadata.get("name"))
+    if shown_id == "":
+        shown_id = job_id
+    if shown_name == "":
+        shown_name = name
+    return shown_id, shown_name
+
+
+def _spec_lines(
+    record: dict[str, object],
+) -> list[list[tuple[str, str]]]:
+    spec = _mapping(record.get("spec"))
+    if spec is None:
+        return []
+    rows: list[tuple[str, str]] = []
+    _add(rows, "image", _text(spec.get("image")))
+    _add(rows, "command", _command(spec))
+    _add(rows, "platform", _text(spec.get("platform")))
+    _add(rows, "preset", _text(spec.get("preset")))
+    _add(rows, "disk", _disk(spec.get("disk")))
+    _add(rows, "shm", _bytes(spec.get("shm_size_bytes")))
+    timeout = _seconds(spec.get("timeout"))
+    if timeout is not None:
+        _add(rows, "timeout", _duration(timeout))
+    _add(rows, "subnet", _text(spec.get("subnet_id")))
+    return [_field(key, value) for key, value in rows]
+
+
+def _time_lines(
+    record: dict[str, object],
+) -> list[list[tuple[str, str]]]:
+    metadata = _mapping(record.get("metadata")) or {}
+    status = _mapping(record.get("status")) or {}
+    created = _moment(metadata.get("created_at"))
+    started = _moment(status.get("started_at"))
+    finished = _moment(status.get("finished_at"))
+    rows: list[tuple[str, str]] = []
+    if created is not None:
+        _add(rows, "created", _stamp(created))
+    if started is not None:
+        _add(rows, "started", _stamp(started))
+    if finished is not None:
+        _add(rows, "finished", _stamp(finished))
+    if created is not None and started is not None:
+        _add(rows, "queued", _duration((started - created).total_seconds()))
+    if started is not None and finished is not None:
+        _add(rows, "ran", _duration((finished - started).total_seconds()))
+    return [_field(key, value) for key, value in rows]
+
+
+def _instance_lines(
+    record: dict[str, object],
+) -> list[list[tuple[str, str]]]:
+    status = _mapping(record.get("status"))
+    if status is None:
+        return []
+    items = status.get("instances")
+    if not isinstance(items, list):
+        return []
+    lines: list[list[tuple[str, str]]] = []
+    for item in items:
+        mapped = _mapping(item)
+        if mapped is None:
+            continue
+        parts: list[tuple[str, str]] = [("  ", ""), ("instance  ", "dim")]
+        values: list[tuple[str, str]] = []
+        _gap(values, _text(mapped.get("compute_instance_id")), "")
+        _gap(values, _text(mapped.get("private_ip")), "")
+        _gap(values, _text(mapped.get("state")), _state_style(
+            _text(mapped.get("state"))
+        ))
+        if not values:
+            continue
+        parts.extend(values)
+        lines.append(parts)
+    return lines
+
+
+def _add(rows: list[tuple[str, str]], key: str, value: str) -> None:
+    if value != "":
+        rows.append((key, value))
+
+
+def _gap(
+    parts: list[tuple[str, str]],
+    value: str,
+    style: str,
+) -> None:
+    if value == "":
+        return
+    if parts:
+        parts.append(("  ", ""))
+    parts.append((value, style))
+
+
+def _field(key: str, value: str) -> list[tuple[str, str]]:
+    return [
+        ("  ", ""),
+        (f"{key:<8}  ", "dim"),
+        (plain_text(value), ""),
+    ]
+
+
+def _command(spec: dict[str, object]) -> str:
+    raw = spec.get("container_command", spec.get("command"))
+    if isinstance(raw, str):
+        return plain_text(raw)
+    if isinstance(raw, list):
+        words = [plain_text(item) for item in raw if isinstance(item, str)]
+        return " ".join(word for word in words if word)
+    return ""
+
+
+def _disk(value: object) -> str:
+    mapped = _mapping(value)
+    if mapped is None:
+        return _text(value)
+    parts = [
+        _bytes(mapped.get("size_bytes")),
+        _text(mapped.get("type")),
+    ]
+    return " ".join(part for part in parts if part)
+
+
+def _bytes(value: object) -> str:
+    number = _whole(value)
+    if number is None:
+        return ""
+    gib = 1024**3
+    if number % gib == 0:
+        return f"{number // gib} GiB"
+    if number >= gib:
+        return f"{number / gib:.1f} GiB"
+    mib = 1024**2
+    if number % mib == 0:
+        return f"{number // mib} MiB"
+    return f"{number} B"
+
+
+def _seconds(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    scale = 1.0
+    if text.endswith("ms"):
+        return None
+    if text.endswith("s"):
+        text = text[:-1]
+    elif text.endswith("m"):
+        scale = 60.0
+        text = text[:-1]
+    elif text.endswith("h"):
+        scale = 3600.0
+        text = text[:-1]
+    try:
+        return float(text) * scale
+    except ValueError:
+        return None
+
+
+def _duration(seconds: float) -> str:
+    whole = int(round(seconds))
+    if whole < 0:
+        whole = 0
+    hours, rem = divmod(whole, 3600)
+    minutes, secs = divmod(rem, 60)
+    parts: list[str] = []
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes:
+        parts.append(f"{minutes}m")
+    if secs or not parts:
+        parts.append(f"{secs}s")
+    return " ".join(parts)
+
+
+def _moment(value: object) -> datetime | None:
+    if not isinstance(value, str) or value.strip() == "":
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    if "." in text:
+        head, tail = text.split(".", 1)
+        digits: list[str] = []
+        suffix = ""
+        for index, char in enumerate(tail):
+            if char.isdigit() and len(digits) < 6:
+                digits.append(char)
+                continue
+            suffix = tail[index:]
+            break
+        text = f"{head}.{''.join(digits)}{suffix}" if digits else (
+            f"{head}{suffix}"
+        )
+    try:
+        moment = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc)
+
+
+def _stamp(moment: datetime) -> str:
+    return moment.strftime("%Y-%m-%d %H:%M:%SZ")
+
+
+def _record_state(record: dict[str, object]) -> str | None:
+    status = _mapping(record.get("status"))
+    if status is None:
+        return None
+    state = status.get("state")
+    if not isinstance(state, str) or state == "":
+        return None
+    return plain_text(state)
+
+
+def _mapping(value: object) -> dict[str, object] | None:
+    if isinstance(value, dict):
+        return value
+    return None
+
+
+def _text(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    return plain_text(value)
+
+
+def _whole(value: object) -> int | None:
+    if isinstance(value, bool) or isinstance(value, float):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
 def timeout_text(job_id: str, seconds: float) -> str:
     """The three lines for a local wait that did not cancel the job."""
     shown = format_seconds(seconds)
@@ -578,13 +900,16 @@ def _progress_parts(
     ]
 
 
-def _change_parts(fact: Status) -> list[tuple[str, str]]:
+def _seen_parts(
+    fact: Status,
+    stream: object,
+) -> list[tuple[str, str]]:
+    """One lifecycle line: the state and when it was first seen."""
     return [
         (plain_text(fact.job_id), "bold cyan"),
         (" ", ""),
-        (_label(fact.previous), "dim"),
-        (" -> ", "dim"),
         (_label(fact.state), _state_style(fact.state)),
+        *_at(stream, fact.observed_seconds),
     ]
 
 
@@ -595,12 +920,24 @@ def _cancel_parts(job_id: str) -> list[tuple[str, str]]:
     ]
 
 
+def _at(
+    stream: object,
+    seconds: float | None,
+) -> list[tuple[str, str]]:
+    """Seconds since the wait started, when this state was first seen."""
+    return [
+        (_dot(stream), "dim"),
+        (format_seconds(seconds or 0), ""),
+    ]
+
+
 def _terminal_parts(
     fact: Status,
     stream: object,
 ) -> list[tuple[str, str]]:
     job_id = plain_text(fact.job_id)
     state = plain_text(fact.state or "")
+    when = _at(stream, fact.observed_seconds)
     if state in _FAILED:
         mark = _bad_mark(stream)
         return [
@@ -608,10 +945,10 @@ def _terminal_parts(
             (job_id, "bold cyan"),
             (" ", ""),
             (state, "bold red"),
+            *when,
             ("\n  ", ""),
             (_FAILURE_RECOVERY, "dim"),
         ]
-    shown = format_seconds(fact.observed_seconds or 0)
     if state == "COMPLETED":
         mark = _ok_mark(stream)
         return [
@@ -619,17 +956,13 @@ def _terminal_parts(
             (job_id, "bold cyan"),
             (" ", ""),
             ("COMPLETED", "bold green"),
-            (_dot(stream), "dim"),
-            ("observed for ", "dim"),
-            (shown, ""),
+            *when,
         ]
     return [
         (job_id, "bold cyan"),
         (" ", ""),
         (_label(fact.state), _state_style(fact.state)),
-        (_dot(stream), "dim"),
-        ("observed for ", "dim"),
-        (shown, ""),
+        *when,
     ]
 
 

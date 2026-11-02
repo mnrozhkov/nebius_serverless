@@ -38,7 +38,7 @@ Use the current implementation in `/Users/mnrozhkov/dev/nebius_serverless` as th
 
 | Baseline | Role in the comparison |
 | --- | --- |
-| `examples/job_quickstart.py` | Starting point for the simple example; currently mixes first-run and lifecycle operations. |
+| `examples/job_quickstart.py` | Starting point for the simple example; create → wait → print `run.record`. |
 | `examples/batch/matrix_multiply.py` | Selected batch showcase: three GPU matrix sizes. Replaces line counting in the comparison design. |
 | `specs/cloud-jobs.md` | Authority for supported APIs and execution behavior. |
 | `nebius==0.6.27` | Official SDK version pinned by the implementation at inspection time. |
@@ -88,10 +88,8 @@ job = ns.Job(
     timeout="1h",
 )
 run = job.create()
-print(run.id)
 run.wait()
-if run.status != "COMPLETED":
-    raise RuntimeError(f"{run.id}: {run.status}")
+print(run.record)
 ```
 
 This is proposed presentation code using the current API, not a change to the example. Retain a normal `main()` wrapper in the eventual runnable file. Count that wrapper in full-file totals for every implementation that uses one.
@@ -106,10 +104,9 @@ Give this example the customer-facing purpose “My first successful GPU command
 
 | Recommendation | Reason |
 | --- | --- |
-| Keep create, print ID, wait, and check status in the main journey. | The reader reaches one unambiguous success condition. `wait()` alone also returns on failure. |
+| Keep create, wait, and print `run.record` in the main journey. | `run.record` is the final job JSON after `wait()`. |
 | Move `get()`, reattachment, and cancellation into a separate lifecycle recipe. | These are useful follow-up tasks but distract from the first successful run. |
 | Remove cancellation after the completion wait from the main quickstart. | It does not illustrate stopping active work. A cancellation recipe should use a still-running job. |
-| Print a compact completion message instead of two full records. | Make the outcome easy to spot; keep full metadata inspection in the lifecycle recipe. |
 | State the profile, project, region, quota, and subnet prerequisites beside the run command. | A short Python file does not eliminate platform setup. |
 | Explain `Job.timeout` versus `Run.wait(timeout=...)`. | The former limits remote execution; the latter stops local waiting without cancelling the job. |
 

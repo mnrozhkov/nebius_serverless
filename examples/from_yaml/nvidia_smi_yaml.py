@@ -4,29 +4,25 @@
 the whole configuration. Uses the active Nebius profile.
 """
 
-import argparse
+import typer
 
 import nebius_serverless as ns
 
 
-def main() -> None:
-    """Create the job described by ``--config`` and wait for it."""
-    parser = argparse.ArgumentParser(
-        description="Run a job recipe loaded from YAML.",
-    )
-    parser.add_argument(
-        "--config",
-        required=True,
+def main(
+    config: str = typer.Option(
+        ...,
         help="Path to the job YAML file.",
-    )
-    args = parser.parse_args()
-    job = ns.Job.from_yaml(args.config)
+    ),
+) -> None:
+    """Create the job described by --config and wait for it."""
+    job = ns.Job.from_yaml(config)
     run = job.create()
-    print(run.id)
     run.wait()
+    run.display()
     if run.status != "COMPLETED":
         raise SystemExit(f"{run.id} ended {run.status}")
 
 
 if __name__ == "__main__":
-    main()
+    typer.run(main)

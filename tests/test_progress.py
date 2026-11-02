@@ -196,9 +196,9 @@ def test_default_calls_show_progress(
     assert snapshot == "job-1 RUNNING\n"
     assert run.wait()["status"] == {"state": "COMPLETED"}
     waited = capsys.readouterr().err
-    assert "job-1 RUNNING · observed for 0s\n" in waited
+    assert "job-1 RUNNING · 0s\n" in waited
     assert waited.count("RUNNING") == 1
-    assert "✓ job-1 COMPLETED · observed for 1s\n" in waited
+    assert "✓ job-1 COMPLETED · 10s\n" in waited
     assert "\x1b" not in waited
     payload = run.cancel()
     assert payload["accepted"] is True
@@ -346,13 +346,13 @@ def test_wait_timeout_text_and_get_count(
     )
     assert caught.value.code == "wait_timeout"
     assert "cancel" in caught.value.recovery
-    assert fake.gets == ["job-1", "job-1"]
+    assert fake.gets == ["job-1"]
     assert fake.cancels == []
     err = capsys.readouterr().err
     assert err.count("Stopped waiting for job-1 after 2s.") == 1
     assert "The job may still be running remotely." in err
     assert "or explicitly request cancellation." in err
-    assert "job-1 RUNNING · observed for 0s\n" in err
+    assert "job-1 RUNNING · 0s\n" in err
     assert SECRET not in err
 
 
@@ -383,14 +383,14 @@ def test_first_observation_terminal_is_summary_only(
     err = capsys.readouterr().err
     assert err.count("COMPLETED") == 1
     assert "->" not in err
-    assert "observed for" in err
+    assert "COMPLETED · 0s" in err
     failed = FakeTransport()
     failed.states = ["FAILED"]
     run = _create(failed, quiet=True)
     assert run.wait(timeout=0)["status"] == {"state": "FAILED"}
     err = capsys.readouterr().err
     assert err == (
-        "✗ job-1 FAILED\n"
+        "✗ job-1 FAILED · 0s\n"
         "  Reload it with jobs.get(id). "
         "Do not send a second create.\n"
     )
@@ -423,7 +423,7 @@ def test_ascii_markers(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "✓" not in text
     assert "✗" not in text
     assert "·" not in text
-    assert text.startswith("x job-1 FAILED\n")
+    assert text.startswith("x job-1 FAILED - 0s\n")
 
 
 def test_secrets_stay_out_of_progress_and_logs(
@@ -891,8 +891,9 @@ def test_terminal_smoke() -> None:
             assert "COMPLETED" in text
             assert "->" not in text
         if mode == "change":
-            assert "PROVISIONING -> RUNNING" in text
-            assert "COMPLETED" in text
+            assert "PROVISIONING · 0s" in text
+            assert "RUNNING · 10s" in text
+            assert "COMPLETED · 20s" in text
         if mode == "failed":
             assert "FAILED" in text
             assert "Do not send a second create." in text

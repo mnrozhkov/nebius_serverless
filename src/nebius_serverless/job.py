@@ -22,6 +22,7 @@ from .profile import load_profile
 from .recipe import (
     check_identity,
     describe,
+    load_inject_files,
     reject_spot_on_cpu,
     request_body,
     timeout_seconds,
@@ -29,6 +30,7 @@ from .recipe import (
     validate_disk,
     validate_env,
     validate_image,
+    validate_inject_files,
     validate_optional_text,
     validate_pricing,
     validate_volumes,
@@ -61,6 +63,7 @@ class Job:
         pricing: str = "on-demand",
         subnet_id: str | None = None,
         volumes: Sequence[str] | None = None,
+        inject_files: Sequence[str] | None = None,
         env: Mapping[str, str] | None = None,
         name: str | None = None,
         disk: str | None = None,
@@ -78,6 +81,7 @@ class Job:
         reject_spot_on_cpu(self.pricing, self.gpu, self.platform)
         self.subnet_id = validate_optional_text(subnet_id, "subnet_id")
         self.volumes = validate_volumes(volumes)
+        self.inject_files = validate_inject_files(inject_files)
         self.env = validate_env(env)
         supplied = validate_optional_text(name, "name")
         self.name = supplied or _generated_name()
@@ -216,6 +220,7 @@ class Job:
             pricing=self.pricing,
             subnet_id=self.subnet_id,
             volumes=self.volumes,
+            inject_files=self.inject_files,
             env_keys=[key for key, _value in self.env],
             name=self.name,
             disk=self.disk,
@@ -233,6 +238,7 @@ class Job:
             pricing=self.pricing,
             subnet_id=self.subnet_id,
             volumes=self.volumes,
+            inject_files=load_inject_files(self.inject_files),
             env=self.env,
             name=self.name,
             disk=self.disk,

@@ -64,9 +64,7 @@ def test_readme_points_at_the_contract() -> None:
 
 def test_examples_pass_gpu_aliases() -> None:
     skipped = {
-        EXAMPLES / "official",
-        EXAMPLES / "modal",
-        EXAMPLES / "runpod",
+        EXAMPLES / "benchmark",
     }
     for path in EXAMPLES.rglob("*"):
         if any(parent in skipped for parent in path.parents):
@@ -81,12 +79,11 @@ def test_examples_pass_gpu_aliases() -> None:
 
 
 def test_nvidia_smi_matches_the_readme_and_the_yaml() -> None:
-    quick = _load(EXAMPLES / "job_quickstart.py")
     job = ns.Job(
-        quick.COMMAND,
-        image=quick.IMAGE,
-        gpu=quick.GPU,
-        timeout=quick.TIMEOUT,
+        ["nvidia-smi"],
+        image=CUDA,
+        gpu="h100",
+        timeout="1h",
     )
     from_file = ns.Job.from_yaml(
         EXAMPLES / "from_yaml" / "nvidia_smi.yaml",
@@ -106,14 +103,17 @@ def test_nvidia_smi_matches_the_readme_and_the_yaml() -> None:
 
 
 def test_axolotl_recipe() -> None:
-    module = _load(EXAMPLES / "train" / "axolotl_lora.py")
     job = ns.Job(
-        module.COMMAND,
-        image=module.IMAGE,
-        gpu=module.GPU,
+        ["bash", "-lc", "axolotl train /workspace/data/config.yaml"],
+        image=AXOLOTL,
+        gpu="h100",
         pricing="spot",
         disk="500Gi",
         timeout="24h",
+        volumes=[
+            "s3://axolotl-data:/workspace/data:ro",
+            "s3://axolotl-artifacts:/workspace/artifacts:rw",
+        ],
     )
     request = _describe(job)
     assert request["image"] == AXOLOTL
@@ -123,7 +123,155 @@ def test_axolotl_recipe() -> None:
     assert request["disk"] == "500Gi"
     assert request["timeout"] == 24 * 3600
     assert request["shm"] == "16Gi"
-    assert "volumes" not in request
+    assert request["volumes"] == [
+        "s3://axolotl-data:/workspace/data:ro",
+        "s3://axolotl-artifacts:/workspace/artifacts:rw",
+    ]
+
+
+def test_parallel_jobs_axolotl_sweep_recipe(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cfg_05b = (
+        EXAMPLES / "parallel_jobs" / "configs" / "qwen_0_5b.yaml"
+    ).read_text(encoding="utf-8")
+    cfg_15b = (
+        EXAMPLES / "parallel_jobs" / "configs" / "qwen_1_5b.yaml"
+    ).read_text(encoding="utf-8")
+    assert "base_model: Qwen/Qwen2.5-0.5B" in cfg_05b
+    assert "output_dir: /workspace/output" in cfg_05b
+    assert "base_model: Qwen/Qwen2.5-1.5B" in cfg_15b
+    assert "output_dir: /workspace/output" in cfg_15b
+
+    module = _load(EXAMPLES / "parallel_jobs" / "axolotl_sweep.py")
+    configs = module.CONFIGS
+    expected = (
+        (
+            "axolotl-qwen-0.5b",
+            configs / "qwen_0_5b.yaml",
+            "/workspace/data/output/qwen_0_5b",
+        ),
+        (
+            "axolotl-qwen-1.5b",
+            configs / "qwen_1_5b.yaml",
+            "/workspace/data/output/qwen_1_5b",
+        ),
+    )
+
+    jobs = (
+        ns.Job(
+            [
+                "bash",
+                "-lc",
+                "axolotl train /workspace/config.yaml"
+                f" && mkdir -p {out_dir}"
+                f" && cp -r /workspace/output/. {out_dir}",
+            ],
+            image=AXOLOTL,
+            gpu="h100",
+            pricing="spot",
+            disk="500Gi",
+            timeout="24h",
+            volumes=["s3://fine-tuning-axolotl:/workspace/data:rw"],
+            inject_files=[f"{config}:/workspace/config.yaml"],
+            name=name,
+        )
+        for name, config, out_dir in expected
+    )
+    for job, (_name, config, out_dir) in zip(jobs, expected, strict=True):
+        request = _describe(job)
+        assert request["image"] == AXOLOTL
+        assert request["platform"] == "gpu-h100-sxm"
+        assert request["preset"] == "1gpu-16vcpu-200gb"
+        assert request["pricing"] == "spot"
+        assert request["disk"] == "500Gi"
+        assert request["timeout"] == 24 * 3600
+        assert request["shm"] == "16Gi"
+        assert request["volumes"] == [
+            "s3://fine-tuning-axolotl:/workspace/data:rw"
+        ]
+        assert request["inject_files"] == [
+            f"{config}:/workspace/config.yaml"
+        ]
+        assert request["env"] == []
+        command = request["command"]
+        assert isinstance(command, list)
+        assert "axolotl train /workspace/config.yaml" in command[2]
+        assert out_dir in command[2]
+
+    events: list[tuple[str, str]] = []
+
+    class _SweepRun:
+        def __init__(self, run_id: str, name: str) -> None:
+            self.id = run_id
+            self._name = name
+            self.status = "COMPLETED"
+            self.record = {"status": {"state": "COMPLETED"}}
+
+        def wait(self) -> dict[str, object]:
+            events.append(("wait", self._name))
+            return self.record
+
+        def display(self) -> None:
+            events.append(("display", self._name))
+            print(f"{self.id}  {self._name}\n  {self.status}")
+
+    def create(self: ns.Job, *_args: object, **_kwargs: object) -> _SweepRun:
+        events.append(("create", self.name))
+        return _SweepRun(f"run-{self.name}", self.name)
+
+    monkeypatch.setattr(module.ns.Job, "create", create)
+    module.main()
+    out = capsys.readouterr().out
+    assert [kind for kind, _name in events] == [
+        "create",
+        "create",
+        "wait",
+        "display",
+        "wait",
+        "display",
+    ]
+    assert "run-axolotl-qwen-0.5b" in out
+    assert "run-axolotl-qwen-1.5b" in out
+    assert "COMPLETED" in out
+
+
+def test_axolotl_finetuning_recipe() -> None:
+    config_text = (EXAMPLES / "finetuning" / "config.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert "base_model: Qwen/Qwen2.5-0.5B" in config_text
+    assert "adapter: qlora" in config_text
+    assert "output_dir: /workspace/output" in config_text
+
+    job = ns.Job(
+        [
+            "bash",
+            "-lc",
+            "RUN_ID=run-$(date +%Y%m%d-%H%M%S)"
+            " && axolotl train /workspace/data/config.yaml"
+            " && mkdir -p /workspace/data/output/$RUN_ID"
+            " && cp -r /workspace/output/. /workspace/data/output/$RUN_ID",
+        ],
+        image=AXOLOTL,
+        gpu="h100",
+        pricing="spot",
+        disk="500Gi",
+        timeout="24h",
+        volumes=["s3://fine-tuning-axolotl:/workspace/data:rw"],
+    )
+    request = _describe(job)
+    assert request["image"] == AXOLOTL
+    assert request["platform"] == "gpu-h100-sxm"
+    assert request["preset"] == "1gpu-16vcpu-200gb"
+    assert request["pricing"] == "spot"
+    assert request["disk"] == "500Gi"
+    assert request["timeout"] == 24 * 3600
+    assert request["shm"] == "16Gi"
+    assert request["volumes"] == [
+        "s3://fine-tuning-axolotl:/workspace/data:rw"
+    ]
 
 
 class _Clock:

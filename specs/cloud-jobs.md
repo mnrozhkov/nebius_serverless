@@ -64,11 +64,8 @@ job = ns.Job(
     timeout="1h",
 )
 run = job.create()
-print(run.id)
-record = run.get()
-record = run.wait()
-run.cancel()
-run = ns.jobs.get(saved_id)
+run.wait()
+print(run.record)
 ```
 
 YAML is the same recipe:
@@ -103,6 +100,7 @@ Callers that already have an event loop use awaited twins: `create_async`, `get_
 | `pricing` | no | `"on-demand"` (default) or `"spot"`. `"spot"` means preemptible and follow the current price. `"spot"` with CPU raises `UnsupportedFeature` before create. Other values raise `ValidationError`. |
 | `subnet_id` | no | Sent when set. Omitted when the project has a single subnet. |
 | `volumes` | no | List of strings in the CLI volume form, passed through: `source:container_path[:mode]` or `s3://bucket:/container_path[:mode[:profile]]`. The client does not verify objects. |
+| `inject_files` | no | List of CLI `--inject-file` strings: `local_path:container_path`. Each local file is read on create, sent as container content, and must be at most 64 KiB. Dry-run lists the strings and does not read the files. |
 | `env` | no | `dict[str, str]` of environment variables. Values are sent on create and never copied into exceptions, plans, or logs emitted by this package. |
 | `name` | no | Console label sent as `metadata.name`. When omitted, the client generates one. It is not a lookup key. |
 | `disk` | no | CLI `--disk-size` string, passed through, such as `500Gi`. When omitted, the adapter sends 250 GiB. |

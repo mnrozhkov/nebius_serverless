@@ -97,6 +97,7 @@ ns.Job(
 | `pricing` | no | `"on-demand"` (default) or `"spot"`. `"spot"` is preemptible and follows the current price. `"spot"` on CPU raises `UnsupportedFeature`. Any other value raises `ValidationError`. |
 | `subnet_id` | no | Sent when set. Omit it when the project has a single subnet. |
 | `volumes` | no | Mount strings, passed through: `source:container_path[:mode]` or `s3://bucket:/container_path[:mode[:profile]]`. Mode is `ro` or `rw` (default `rw`). The client does not verify the objects. |
+| `inject_files` | no | CLI [`--inject-file`](https://docs.nebius.com/cli/reference/ai/create) strings: `local_path:container_path`. Each local file is read on create (not on `Job` construction), sent as container content, and must be at most 64 KiB. Dry-run lists the strings and does not read the files. |
 | `env` | no | `dict[str, str]`. Values are sent on create and left out of dry-run descriptions and exception text. |
 | `name` | no | Console label (`metadata.name`). When omitted, the client generates `job-` plus 12 hex characters. It is not a lookup key. |
 | `disk` | no | CLI size string, passed through, such as `500Gi`. When omitted, the request uses `250Gi`. |
@@ -105,7 +106,7 @@ ns.Job(
 
 Shared memory is always `16Gi`. It is not a parameter.
 
-After construction these attributes are readable: `command`, `image`, `gpu`, `platform`, `preset`, `timeout_seconds`, `pricing`, `subnet_id`, `volumes`, `env`, `name`, `disk`, `profile`, `project`. `env` is a tuple of `(key, value)` pairs. `timeout_seconds` is the normalized deadline.
+After construction these attributes are readable: `command`, `image`, `gpu`, `platform`, `preset`, `timeout_seconds`, `pricing`, `subnet_id`, `volumes`, `inject_files`, `env`, `name`, `disk`, `profile`, `project`. `env` is a tuple of `(key, value)` pairs. `timeout_seconds` is the normalized deadline.
 
 ### `Job.from_yaml`
 
@@ -155,7 +156,7 @@ job.create(
 
 `create(dry_run=True)` builds the request, returns that description, and does not call create. Project and region come from `project=` / `region=` when passed, otherwise from the active SDK profile (`profile=` on the `Job` selects it). When the project id is known and the profile does not name a region, the region is `spec.region` from IAM v2 `ProjectService.get`. That read is not a job create. A missing or ambiguous project, or a project with no region, raises `ValidationError` before create.
 
-The description includes `image`, `command`, `args` when present, `project`, `region`, `platform`, `preset`, `timeout` (seconds), `pricing`, `subnet_id` when set, `volumes` when set, `env` (key names only), `name`, `disk`, and `shm`. Env values are not included.
+The description includes `image`, `command`, `args` when present, `project`, `region`, `platform`, `preset`, `timeout` (seconds), `pricing`, `subnet_id` when set, `volumes` when set, `inject_files` when set, `env` (key names only), `name`, `disk`, and `shm`. Env values and inject-file contents are not included.
 
 `region` is the project region used to resolve a `gpu` alias. Pass it to skip the project lookup. `project` on this call overrides `Job.project`.
 
@@ -204,7 +205,7 @@ One `nebius ai job get`. Returns the job JSON: state plus the submitted params. 
 run.wait(timeout=None, *, quiet=False) -> dict
 ```
 
-Polls `get` about once a second until `status.state` is terminal, then returns that JSON. Terminal states are `COMPLETED`, `FAILED`, `CANCELLED`, and `ERROR`. The raw string is preserved. The wait prints the observation and one final outcome. `quiet=True` suppresses that progress for this call only.
+Polls `get` about every 10 seconds until `status.state` is terminal, then returns that JSON. Terminal states are `COMPLETED`, `FAILED`, `CANCELLED`, and `ERROR`. The raw string is preserved. Each new state is one line, with the seconds since the wait started. The last line is the outcome. An interactive terminal also keeps a spinner on the current state. `quiet=True` suppresses that progress for this call only.
 
 `wait(timeout=0)` performs one fetch. When the state is not terminal it raises `WaitTimeout` with the job id. `wait(timeout=seconds)` stops the local poll at that deadline. Neither form cancels the cloud job. The job may still be running. Reload it with `jobs.get(id)` or call `cancel`.
 
@@ -215,6 +216,16 @@ run.cancel(*, quiet=False) -> dict
 ```
 
 Requests cancellation and returns when the request is accepted. The payload does not claim the container has stopped. Progress says the request was accepted. `quiet=True` suppresses that line for this call only. A later `get` reports the cancelled state when Nebius has finished cancelling.
+
+### `Run.display`
+
+```python
+run.display() -> None
+```
+
+Prints the last fetched record as a short summary on stdout: id, name, state, image, command, machine, disk, timings, and one line per instance. Bytes and durations are human-readable. The state word is colored on a terminal. `NO_COLOR` and a non-terminal stdout leave the text plain. `record` stays the raw JSON.
+
+`display` does not fetch. Before the first successful `get` or `wait` it prints the id, the name, and `no record yet`.
 
 ### Awaited twins
 

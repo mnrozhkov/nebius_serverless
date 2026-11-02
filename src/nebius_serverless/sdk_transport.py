@@ -332,6 +332,16 @@ def build_create_request(body: Mapping[str, object]) -> object:
         spec_kwargs["volumes"] = [
             _mount(item) for item in mounts if isinstance(item, Mapping)
         ]
+    injections = spec.get("injected_files")
+    if isinstance(injections, list) and injections:
+        spec_kwargs["injected_files"] = [
+            JobSpec.FileInjection(
+                container_path=str(item["container_path"]),
+                content=item["content"],
+            )
+            for item in injections
+            if isinstance(item, Mapping)
+        ]
     return CreateJobRequest(
         metadata=ResourceMetadata(
             parent_id=str(metadata["parent_id"]),

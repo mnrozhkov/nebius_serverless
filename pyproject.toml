@@ -9,6 +9,7 @@ description = "Python client for Nebius Serverless AI Jobs"
 requires-python = ">=3.10"
 dependencies = [
     "nebius==0.6.27",
+    "typer==0.27.3",
     "PyYAML==6.0.3",
     "rich==15.0.0",
 ]

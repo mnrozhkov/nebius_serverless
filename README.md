@@ -38,11 +38,8 @@ job = ns.Job(
     timeout="1h",
 )
 run = job.create()
-print(run.id)
-record = run.get()
-record = run.wait()
-run.cancel()
-run = ns.jobs.get(saved_id)
+run.wait()
+run.display()
 ```
 
 `examples/quiet_job.py` passes `quiet=True` on both `create` and `wait`. Stdout still prints the id and the final state:
@@ -53,6 +50,8 @@ print(run.id)
 record = run.wait(quiet=True)
 print(run.id, record["status"]["state"])
 ```
+
+`run.get()`, `run.cancel()`, and `ns.jobs.get(id)` are in [docs/examples.md](docs/examples.md).
 
 The same recipe can be loaded from YAML:
 

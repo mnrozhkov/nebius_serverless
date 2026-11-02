@@ -1,4 +1,4 @@
-"""Run nvidia-smi on a remote RunPod App SDK (beta) H100 GPU."""
+"""Run nvidia-smi on a remote RunPod H100 GPU and verify the output."""
 
 import subprocess
 
@@ -11,7 +11,7 @@ app = runpod.App("nebius-comparison-quickstart")
 @app.queue(gpu="H100", execution_timeout_ms=3600000)
 # --- orchestration: end ---
 def run_nvidia_smi() -> str:
-    """Execute nvidia-smi in the remote worker and return stdout."""
+    """Execute nvidia-smi in the remote container and return stdout."""
     completed = subprocess.run(
         ["nvidia-smi"],
         check=True,

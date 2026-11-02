@@ -11,8 +11,10 @@ Examples are grouped by use case. Settings other than a YAML path live in the Py
 | `examples/job_quickstart.py` | One `nvidia-smi` job, the README recipe |
 | `examples/from_yaml/` | That same recipe loaded from YAML |
 | `examples/train/` | Axolotl fine-tune |
+| `examples/finetuning/` | Axolotl QLoRA fine-tune (`config.yaml` + S3 bucket mount) |
+| `examples/parallel_jobs/` | Parallel Axolotl fine-tuning sweep across two models, saving outputs to S3 |
 | `examples/batch/matrix_multiply.py` | Three GPU matrix multiplications, one size per job |
-| `examples/comparison/` | Side-by-side [SDK comparison](sdk-comparison.md) (Official Nebius, Designed Nebius, Modal, RunPod) |
+| `examples/benchmark/` | Side-by-side [SDK comparison](../examples/benchmark/sdk-comparison.md) (Official Nebius, Designed Nebius, Modal, RunPod) |
 
 ## Quickstart
 
@@ -29,15 +31,9 @@ job = ns.Job(
     gpu="h100",
     timeout="1h",
 )
-print(job.create(dry_run=True))
-
 run = job.create()
-print(run.id)
-record = run.get()
-record = run.wait()
-saved_id = run.id
-loaded = ns.jobs.get(saved_id)
-print(loaded.status)
+run.wait()
+run.display()
 ```
 
 The same recipe as YAML, `examples/from_yaml/nvidia_smi.yaml`, run by `examples/from_yaml/nvidia_smi_yaml.py`:
@@ -67,7 +63,7 @@ The YAML runner waits until `status.state` is `COMPLETED`.
 
 ## Train
 
-One spot GPU job. The full cookbook command is `examples/train/axolotl_lora.py`. In `eu-north1`, `gpu="h100"` selects `gpu-h100-sxm` and `1gpu-16vcpu-200gb`. Shared memory stays the `16Gi` default. The published command does not mount a volume.
+One spot GPU job. The full cookbook command is `examples/train/axolotl_lora.py`. In `eu-north1`, `gpu="h100"` selects `gpu-h100-sxm` and `1gpu-16vcpu-200gb`. Shared memory stays the `16Gi` default.
 
 ```python
 job = ns.Job(
@@ -77,14 +73,104 @@ job = ns.Job(
     pricing="spot",
     disk="500Gi",
     timeout="24h",
+    volumes=[
+        "s3://axolotl-data:/workspace/data:ro",
+        "s3://axolotl-artifacts:/workspace/artifacts:rw",
+    ],
 )
-print(job.create(dry_run=True))
 run = job.create()
-record = run.wait()
+run.wait()
+run.display()
 ```
 
 ```bash
 python examples/train/axolotl_lora.py
+```
+
+`examples/finetuning/axolotl-finetuning.py` pairs that recipe with `examples/finetuning/config.yaml` (`Qwen/Qwen2.5-0.5B` QLoRA on `Salesforce/wikitext`) and mounts `s3://fine-tuning-axolotl:/workspace/data:rw`. Training writes to local `/workspace/output` first and copies checkpoints to `/workspace/data/output/$RUN_ID` on completion:
+
+```python
+job = ns.Job(
+    [
+        "bash",
+        "-lc",
+        "RUN_ID=run-$(date +%Y%m%d-%H%M%S)"
+        " && axolotl train /workspace/data/config.yaml"
+        " && mkdir -p /workspace/data/output/$RUN_ID"
+        " && cp -r /workspace/output/. /workspace/data/output/$RUN_ID",
+    ],
+    image="docker.io/axolotlai/axolotl:main-20260309-py3.11-cu128-2.9.1",
+    gpu="h100",
+    pricing="spot",
+    disk="500Gi",
+    timeout="24h",
+    volumes=["s3://fine-tuning-axolotl:/workspace/data:rw"],
+)
+run = job.create()
+run.wait()
+run.display()
+```
+
+```bash
+aws s3 cp examples/finetuning/config.yaml s3://fine-tuning-axolotl/config.yaml \
+  --endpoint-url https://storage.eu-north1.nebius.cloud
+uv run python examples/finetuning/axolotl-finetuning.py
+```
+
+## Parallel Fine-Tuning Sweep
+
+`examples/parallel_jobs/axolotl_sweep.py` runs two Axolotl jobs in parallel (`Qwen/Qwen2.5-0.5B` and `Qwen/Qwen2.5-1.5B`). Each job injects its local YAML into `/workspace/config.yaml` with `inject_files=` (CLI [`--inject-file`](https://docs.nebius.com/cli/reference/ai/create); max 64 KiB). Both mount `s3://fine-tuning-axolotl:/workspace/data:rw` and copy checkpoints into separate folders under `/workspace/data/output/`. Configs are not uploaded to Object Storage first.
+
+```python
+from pathlib import Path
+
+CONFIGS = Path("examples/parallel_jobs/configs")
+
+jobs = (
+    ns.Job(
+        [
+            "bash",
+            "-lc",
+            "axolotl train /workspace/config.yaml"
+            " && mkdir -p /workspace/data/output/qwen_0_5b"
+            " && cp -r /workspace/output/. /workspace/data/output/qwen_0_5b",
+        ],
+        image="docker.io/axolotlai/axolotl:main-20260309-py3.11-cu128-2.9.1",
+        gpu="h100",
+        pricing="spot",
+        disk="500Gi",
+        timeout="24h",
+        volumes=["s3://fine-tuning-axolotl:/workspace/data:rw"],
+        inject_files=[f"{CONFIGS / 'qwen_0_5b.yaml'}:/workspace/config.yaml"],
+        name="axolotl-qwen-0.5b",
+    ),
+    ns.Job(
+        [
+            "bash",
+            "-lc",
+            "axolotl train /workspace/config.yaml"
+            " && mkdir -p /workspace/data/output/qwen_1_5b"
+            " && cp -r /workspace/output/. /workspace/data/output/qwen_1_5b",
+        ],
+        image="docker.io/axolotlai/axolotl:main-20260309-py3.11-cu128-2.9.1",
+        gpu="h100",
+        pricing="spot",
+        disk="500Gi",
+        timeout="24h",
+        volumes=["s3://fine-tuning-axolotl:/workspace/data:rw"],
+        inject_files=[f"{CONFIGS / 'qwen_1_5b.yaml'}:/workspace/config.yaml"],
+        name="axolotl-qwen-1.5b",
+    ),
+)
+
+runs = [job.create() for job in jobs]
+for run in runs:
+    run.wait()
+    run.display()
+```
+
+```bash
+uv run python examples/parallel_jobs/axolotl_sweep.py
 ```
 
 ## Batch
@@ -104,7 +190,7 @@ The image is pinned by digest, checked against the `linux/amd64` manifest of `py
 | cuDNN | 9, as named by that tag |
 | base | Ubuntu 22.04 |
 
-The worker sets `torch.backends.cuda.matmul.allow_tf32 = False` and `torch.set_float32_matmul_precision("highest")` so the float32 multiply uses full FP32 rather than a default that can change. It requires CUDA, checks `[[1, 2], [3, 4]] @ [[5, 6], [7, 8]]`, then checks the shape, finiteness, and nine sampled entries of the large product. A failed check does not write a success report. Each report is `/data/<prefix>/<size>.json` with `schema_version` 1, `size`, `gpu`, `elapsed_ms`, `mean`, and `verified: true`. See [SDK comparison](sdk-comparison.md) for the same workload beside the official Nebius SDK, Modal, and RunPod.
+The worker sets `torch.backends.cuda.matmul.allow_tf32 = False` and `torch.set_float32_matmul_precision("highest")` so the float32 multiply uses full FP32 rather than a default that can change. It requires CUDA, checks `[[1, 2], [3, 4]] @ [[5, 6], [7, 8]]`, then checks the shape, finiteness, and nine sampled entries of the large product. A failed check does not write a success report. Each report is `/data/<prefix>/<size>.json` with `schema_version` 1, `size`, `gpu`, `elapsed_ms`, `mean`, and `verified: true`. See [SDK comparison](../examples/benchmark/sdk-comparison.md) for the same workload beside the official Nebius SDK, Modal, and RunPod.
 
 `timeout="1h"` is the remote Jobs deadline. `run.wait(timeout=5400)` only stops the local poll; it does not cancel the job. After `COMPLETED`, the script polls the report for at most 60 seconds, every 2 seconds, and only when the object is missing. An authentication failure, malformed JSON, or an invalid report stops immediately. Pricing stays the on-demand default.
 
@@ -177,17 +263,13 @@ except ns.WaitTimeout as exc:
 
 ## Quiet progress
 
-`examples/quiet_job.py` uses the same recipe as the quickstart and passes `quiet=True` on both `create` and `wait`. Stdout still prints the id and the final state. Other calls on that run show progress again. `create(dry_run=True)` stays silent.
+Pass `quiet=True` on `create` and `wait` to suppress progress on stderr. Stdout still prints the id and the final state. Other calls on that run show progress again. `create(dry_run=True)` stays silent.
 
 ```python
 run = job.create(quiet=True)
 print(run.id)
 record = run.wait(quiet=True)
 print(run.id, record["status"]["state"])
-```
-
-```bash
-python examples/quiet_job.py
 ```
 
 ## Inside an event loop
