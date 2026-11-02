@@ -166,9 +166,6 @@ def test_official_axolotl_lora_builds_matching_create_request(
     class _FakeOperation:
         resource_id = "aijob-test-axolotl"
 
-        def sync_wait(self) -> None:
-            pass
-
     class _FakeOpCall:
         def wait(self) -> _FakeOperation:
             return _FakeOperation()
@@ -204,7 +201,7 @@ def test_official_axolotl_lora_builds_matching_create_request(
     module.main()
     assert len(captured_requests) == 1
     assert closed == [True]
-    assert "aijob-test-axolotl" in capsys.readouterr().out
+    assert capsys.readouterr().out == ""
 
     req = captured_requests[0]
     spec = getattr(req, "spec")
@@ -217,7 +214,6 @@ def test_official_axolotl_lora_builds_matching_create_request(
     assert spec.platform == "gpu-h100-sxm"
     assert spec.preset == "1gpu-16vcpu-200gb"
     assert spec.preemptible is True
-    assert spec.shm_size_bytes == 16 * 1024**3
     assert spec.disk.size_bytes == 500 * 1024**3
     assert len(spec.volumes) == 2
     assert spec.volumes[0].source == "s3://axolotl-data"

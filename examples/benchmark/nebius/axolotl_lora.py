@@ -24,11 +24,6 @@ from nebius.api.nebius.ai.v1 import (
 from nebius.api.nebius.common.v1 import ResourceMetadata
 from nebius.api.nebius.compute.v1 import DiskSpec as ComputeDisk
 from nebius.sdk import SDK
-
-TERMINAL_STATES = frozenset(
-    {"COMPLETED", "FAILED", "CANCELLED", "ERROR"}
-)
-POLL_SECONDS = 1.0
 # --- orchestration: end ---
 
 
@@ -37,8 +32,6 @@ def main() -> None:
     # --- orchestration: start ---
     config = Config()
     project_id = config.parent_id
-    if not isinstance(project_id, str) or not project_id.strip():
-        raise RuntimeError("Nebius profile has no parent_id configured")
     sdk = SDK(config_reader=config, parent_id=project_id)
     try:
         client = JobServiceClient(sdk)
@@ -61,7 +54,6 @@ def main() -> None:
                 platform="gpu-h100-sxm",
                 preset="1gpu-16vcpu-200gb",
                 timeout=timedelta(seconds=24 * 3600),
-                shm_size_bytes=16 * 1024**3,
                 disk=JobSpec.DiskSpec(
                     type=ComputeDisk.DiskType.NETWORK_SSD,
                     size_bytes=500 * 1024**3,
@@ -85,17 +77,13 @@ def main() -> None:
             ),
         )
         operation = client.create(request).wait()
-        operation.sync_wait()
         job_id = operation.resource_id
-        if not isinstance(job_id, str) or not job_id:
-            raise RuntimeError("Create operation returned no job ID")
-        print(job_id)
         while True:
             job = client.get(GetJobRequest(id=job_id)).wait()
             state = job.status.state.name
-            if state in TERMINAL_STATES:
+            if state in {"COMPLETED", "FAILED", "CANCELLED", "ERROR"}:
                 break
-            time.sleep(POLL_SECONDS)
+            time.sleep(1.0)
         if state != "COMPLETED":
             raise RuntimeError(f"{job_id}: {state}")
     finally:

@@ -1,14 +1,13 @@
 # Official Nebius Python SDK Examples (`nebius==0.6.27`)
 
-Baseline scripts for the SDK comparison using the official `nebius` Python SDK (`nebius==0.6.27`) synchronous interface (`JobServiceClient`, `CreateJobRequest`, `GetJobRequest`, `operation.wait()`, `operation.sync_wait()`).
+Baseline scripts for the SDK comparison using the official `nebius` Python SDK (`nebius==0.6.27`) synchronous interface (`JobServiceClient`, `CreateJobRequest`, `GetJobRequest`, `operation.wait()`). Completion is a `GetJob` poll. `operation.sync_wait()` is not used, because that waits until the container exits and would duplicate the poll.
 
-Neither script imports `nebius_serverless` or `asyncio`. Both resolve the exact same H100 settings in `eu-north1` that `nebius_serverless` selects for [`examples/job_quickstart.py`](../../job_quickstart.py) and [`examples/train/axolotl_lora.py`](../../train/axolotl_lora.py):
+Neither script imports `nebius_serverless` or `asyncio`. Both select the same H100 platform and preset in `eu-north1` that `nebius_serverless` resolves for [`examples/job_quickstart.py`](../../job_quickstart.py) and [`examples/train/axolotl_lora.py`](../../train/axolotl_lora.py). Disk size and `/dev/shm` are left unset except for the Axolotl disk, so the platform default applies. `nebius_serverless` still sends 250 GiB and 16 GiB on the quickstart, and 16 GiB `/dev/shm` on Axolotl.
 
 - `platform="gpu-h100-sxm"`
 - `preset="1gpu-16vcpu-200gb"`
-- `shm_size_bytes`: `16 GiB` (`16 * 1024**3` bytes)
-- `quickstart.py`: on-demand pricing, `timeout=timedelta(seconds=3600)` (1h), `250 GiB` `NETWORK_SSD`
-- `axolotl_lora.py`: spot pricing (`preemptible=True`, `PricingModelSpec(follows_spot_price=FollowsSpotPriceSpec())`), `timeout=timedelta(seconds=24 * 3600)` (24h), `500 GiB` `NETWORK_SSD`, and `s3://axolotl-data` (`READ_ONLY` at `/workspace/data`) + `s3://axolotl-artifacts` (`READ_WRITE` at `/workspace/artifacts`) volume mounts
+- `quickstart.py`: on-demand pricing, `timeout=timedelta(seconds=3600)` (1h). No disk and no `shm_size_bytes`.
+- `axolotl_lora.py`: spot pricing (`preemptible=True`, `PricingModelSpec(follows_spot_price=FollowsSpotPriceSpec())`), `timeout=timedelta(seconds=24 * 3600)` (24h), `500 GiB` `NETWORK_SSD`, and `s3://axolotl-data` (`READ_ONLY` at `/workspace/data`) + `s3://axolotl-artifacts` (`READ_WRITE` at `/workspace/artifacts`) volume mounts. No `shm_size_bytes`.
 
 ## Prerequisites
 
@@ -33,7 +32,7 @@ Run both scripts from the repository root using `uv run`:
 uv run python examples/benchmark/nebius/quickstart.py
 ```
 
-Submits one H100 job running `nvidia-smi` on `nvidia/cuda:13.1.1-runtime-ubuntu24.04`, prints the accepted job ID (`operation.resource_id`), polls `GetJob` until the state is terminal (`COMPLETED`, `FAILED`, `CANCELLED`, or `ERROR`), and raises `RuntimeError` unless the final state is `COMPLETED`.
+Submits one H100 job running `nvidia-smi` on `nvidia/cuda:13.1.1-runtime-ubuntu24.04`, polls `GetJob` until the state is terminal (`COMPLETED`, `FAILED`, `CANCELLED`, or `ERROR`), and raises `RuntimeError` unless the final state is `COMPLETED`. The job id is `operation.resource_id` and is not printed.
 
 Because the Nebius Jobs API does not return container stdout in the `GetJob` response, inspect the GPU output separately with the Nebius CLI:
 
