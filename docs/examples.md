@@ -119,19 +119,15 @@ uv run python examples/finetuning/axolotl-finetuning.py
 
 ## Parallel Fine-Tuning Sweep
 
-`examples/parallel_jobs/axolotl_sweep.py` runs two Axolotl jobs in parallel (`Qwen/Qwen2.5-0.5B` and `Qwen/Qwen2.5-1.5B`). Each job injects its local YAML into `/workspace/config.yaml` with `inject_files=` (CLI [`--inject-file`](https://docs.nebius.com/cli/reference/ai/create); max 64 KiB). Both mount `s3://fine-tuning-axolotl:/workspace/data:rw` and copy checkpoints into separate folders under `/workspace/data/output/`. Configs are not uploaded to Object Storage first.
+`examples/parallel_jobs/axolotl_sweep.py` runs two Axolotl jobs in parallel (`Qwen/Qwen2.5-0.5B` and `Qwen/Qwen2.5-1.5B`). Upload both configs to Object Storage first. Both jobs mount `s3://fine-tuning-axolotl:/workspace/data:rw`, train from `/workspace/data/configs/…`, and copy checkpoints into separate folders under `/workspace/data/output/`.
 
 ```python
-from pathlib import Path
-
-CONFIGS = Path("examples/parallel_jobs/configs")
-
 jobs = (
     ns.Job(
         [
             "bash",
             "-lc",
-            "axolotl train /workspace/config.yaml"
+            "axolotl train /workspace/data/configs/qwen_0_5b.yaml"
             " && mkdir -p /workspace/data/output/qwen_0_5b"
             " && cp -r /workspace/output/. /workspace/data/output/qwen_0_5b",
         ],
@@ -141,14 +137,13 @@ jobs = (
         disk="500Gi",
         timeout="24h",
         volumes=["s3://fine-tuning-axolotl:/workspace/data:rw"],
-        inject_files=[f"{CONFIGS / 'qwen_0_5b.yaml'}:/workspace/config.yaml"],
         name="axolotl-qwen-0.5b",
     ),
     ns.Job(
         [
             "bash",
             "-lc",
-            "axolotl train /workspace/config.yaml"
+            "axolotl train /workspace/data/configs/qwen_1_5b.yaml"
             " && mkdir -p /workspace/data/output/qwen_1_5b"
             " && cp -r /workspace/output/. /workspace/data/output/qwen_1_5b",
         ],
@@ -158,7 +153,6 @@ jobs = (
         disk="500Gi",
         timeout="24h",
         volumes=["s3://fine-tuning-axolotl:/workspace/data:rw"],
-        inject_files=[f"{CONFIGS / 'qwen_1_5b.yaml'}:/workspace/config.yaml"],
         name="axolotl-qwen-1.5b",
     ),
 )
@@ -170,6 +164,9 @@ for run in runs:
 ```
 
 ```bash
+aws s3 cp examples/parallel_jobs/configs/ s3://fine-tuning-axolotl/configs/ \
+  --recursive \
+  --endpoint-url https://storage.eu-north1.nebius.cloud
 uv run python examples/parallel_jobs/axolotl_sweep.py
 ```
 

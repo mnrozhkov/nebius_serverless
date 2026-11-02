@@ -145,16 +145,15 @@ def test_parallel_jobs_axolotl_sweep_recipe(
     assert "output_dir: /workspace/output" in cfg_15b
 
     module = _load(EXAMPLES / "parallel_jobs" / "axolotl_sweep.py")
-    configs = module.CONFIGS
     expected = (
         (
             "axolotl-qwen-0.5b",
-            configs / "qwen_0_5b.yaml",
+            "/workspace/data/configs/qwen_0_5b.yaml",
             "/workspace/data/output/qwen_0_5b",
         ),
         (
             "axolotl-qwen-1.5b",
-            configs / "qwen_1_5b.yaml",
+            "/workspace/data/configs/qwen_1_5b.yaml",
             "/workspace/data/output/qwen_1_5b",
         ),
     )
@@ -164,7 +163,7 @@ def test_parallel_jobs_axolotl_sweep_recipe(
             [
                 "bash",
                 "-lc",
-                "axolotl train /workspace/config.yaml"
+                f"axolotl train {config}"
                 f" && mkdir -p {out_dir}"
                 f" && cp -r /workspace/output/. {out_dir}",
             ],
@@ -174,7 +173,6 @@ def test_parallel_jobs_axolotl_sweep_recipe(
             disk="500Gi",
             timeout="24h",
             volumes=["s3://fine-tuning-axolotl:/workspace/data:rw"],
-            inject_files=[f"{config}:/workspace/config.yaml"],
             name=name,
         )
         for name, config, out_dir in expected
@@ -191,13 +189,11 @@ def test_parallel_jobs_axolotl_sweep_recipe(
         assert request["volumes"] == [
             "s3://fine-tuning-axolotl:/workspace/data:rw"
         ]
-        assert request["inject_files"] == [
-            f"{config}:/workspace/config.yaml"
-        ]
+        assert "inject_files" not in request
         assert request["env"] == []
         command = request["command"]
         assert isinstance(command, list)
-        assert "axolotl train /workspace/config.yaml" in command[2]
+        assert f"axolotl train {config}" in command[2]
         assert out_dir in command[2]
 
     events: list[tuple[str, str]] = []

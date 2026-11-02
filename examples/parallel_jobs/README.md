@@ -1,6 +1,6 @@
 # Parallel Axolotl Fine-Tuning
 
-`axolotl_sweep.py` launches two Nebius Serverless AI Jobs in parallel. Each job injects a local Axolotl config into the container (`--inject-file` / `inject_files=`), trains on a spot H100, and copies checkpoints into a separate folder on the same Object Storage volume.
+`axolotl_sweep.py` launches two Nebius Serverless AI Jobs in parallel. Upload both Axolotl configs to Object Storage first, then each job mounts the same bucket, trains on a spot H100, and copies checkpoints into a separate folder under that volume.
 
 ## Files
 
@@ -10,14 +10,22 @@
 
 ## Config delivery and outputs
 
-Configs stay on your machine. `inject_files=["local.yaml:/workspace/config.yaml"]` sends each file with the create request (same as Nebius CLI [`--inject-file`](https://docs.nebius.com/cli/reference/ai/create); max 64 KiB). You do not upload the YAMLs to Object Storage first.
-
 Both YAML files keep `output_dir: /workspace/output` on container-local disk because Axolotl's `debug.log` appends are not supported on an S3 FUSE mount. After training, each container copies `/workspace/output/.` into:
 
 - `s3://fine-tuning-axolotl/output/qwen_0_5b/`
 - `s3://fine-tuning-axolotl/output/qwen_1_5b/`
 
 ## Usage
+
+1. Upload both Axolotl configs to your Object Storage bucket:
+
+```bash
+aws s3 cp examples/parallel_jobs/configs/ s3://fine-tuning-axolotl/configs/ \
+  --recursive \
+  --endpoint-url https://storage.eu-north1.nebius.cloud
+```
+
+2. Run the parallel sweep:
 
 ```bash
 uv run python examples/parallel_jobs/axolotl_sweep.py
